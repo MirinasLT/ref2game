@@ -22,7 +22,7 @@
 Отправьте этот промпт вашему агенту (Claude Code или Codex):
 
 ```text
-Установи скилл ref2game https://github.com/studioigor/ref2game
+Установи скилл ref2game https://github.com/MirinasLT/ref2game
 ```
 
 В репозитории две редакции одного скилла. Claude Code берёт папку `claude/`, Codex — папку `codex/`. Дальше отправьте `/ref2game` в Claude Code или `$ref2game` в Codex и приложите референс.

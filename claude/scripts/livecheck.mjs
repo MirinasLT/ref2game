@@ -8,7 +8,7 @@
 // prints one JSON line: { errors, fps, dev, evals, shots }. Exit code 2 on page errors or fps < --minfps (default 55).
 // Without --url it serves the project itself on a free port.
 import http from 'node:http'; import fs from 'node:fs'; import path from 'node:path'; import { createRequire } from 'node:module';
-const here = path.dirname(new URL(import.meta.url).pathname);
+const here = import.meta.dirname;
 const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT || path.join(here, 'node_modules/playwright'));
 const args = process.argv.slice(2); const opt = (k, d) => { const i = args.indexOf('--' + k); return i >= 0 ? args[i + 1] : d; };
 const root = process.cwd(); let srv = null, url = opt('url');

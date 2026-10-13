@@ -958,6 +958,8 @@ def codex_generate(prompt, refs, size, transparent, model, out_raw, opts, dry_ru
     exe = shutil.which("codex") or "codex"
     cmd = [exe, "exec", "--skip-git-repo-check", "-s", "workspace-write", "-C", os.getcwd(),
            "-c", 'model_reasoning_effort="low"']
+    if opts.get("agent_model"):                    # the codex agent model (generator.opts.codex.agent_model), when the global default isn't usable
+        cmd += ["-c", f'model="{opts["agent_model"]}"']
     for r in refs:
         cmd += ["-i", r]
     cmd += ["--", "-"]

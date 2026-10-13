@@ -22,7 +22,7 @@ A screenshot, key art or concept image goes in, and a ready game prototype comes
 Send this prompt to your agent (Claude Code or Codex):
 
 ```text
-Install the skill ref2game https://github.com/studioigor/ref2game
+Install the skill ref2game https://github.com/MirinasLT/ref2game
 ```
 
 The repository has two editions of the same skill. Claude Code takes the `claude/` folder, Codex takes the `codex/` folder. Then send `/ref2game` in Claude Code or `$ref2game` in Codex with your reference attached.

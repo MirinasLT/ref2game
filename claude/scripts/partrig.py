@@ -24,7 +24,7 @@ ap = argparse.ArgumentParser(); ap.add_argument('name'); ap.add_argument('--shee
 ap.add_argument('--order', default='body,leg,arm'); ap.add_argument('--legs', default='0.3,0.7'); ap.add_argument('--hem', type=float, default=0.07)
 ap.add_argument('--sh', action='append', default=[]); ap.add_argument('--knee', type=float, default=0.5); ap.add_argument('--ankle', type=float, default=0.8)
 ap.add_argument('--elbow', type=float, default=0.47); ap.add_argument('--hand', type=float, default=0.9); ap.add_argument('--face', default='left')
-ap.add_argument('--src', default='art/gen'); ap.add_argument('--preview', default=''); ap.add_argument('--hipy', type=float, default=0); ap.add_argument('--grip', type=float, default=0)
+ap.add_argument('--src', default='art/gen'); ap.add_argument('--preview', default=''); ap.add_argument('--hipy', type=float, default=0); ap.add_argument('--grip', type=float, default=0); ap.add_argument('--nobodyfill', action='store_true')  # big-headed characters: eyes/brows sit in the side band and get 'filled'
 a = ap.parse_args()
 
 S = np.array(Image.open(a.sheet).convert('RGBA')); M = S[:, :, 3] > 60
@@ -60,7 +60,7 @@ def top_band(img, f):
 P['leg'], n1 = close_openings(P['leg'], top_band(P['leg'], 0.16)); P['arm'], n2 = close_openings(P['arm'], top_band(P['arm'], 0.2))
 bb = P['body']; reg = np.zeros(bb.shape[:2], bool); reg[int(bb.shape[0] * 0.2):int(bb.shape[0] * 0.62)] = True
 xs_ = np.where(bb[:, :, 3].any(axis=0))[0]; wB = xs_.max() - xs_.min(); side = np.zeros_like(reg); side[:, :xs_.min() + int(0.3 * wB)] = True; side[:, xs_.max() - int(0.3 * wB):] = True
-P['body'], n3 = close_openings(bb, reg & side)
+P['body'], n3 = (bb, 0) if a.nobodyfill else close_openings(bb, reg & side)
 print('closed openings (px): leg', n1, 'arm', n2, 'body', n3)
 body, leg, arm = P['body'], P['leg'], P['arm']
 def rows(img, f):                                      # mean x of the opaque pixels in the row at fraction f of the height
