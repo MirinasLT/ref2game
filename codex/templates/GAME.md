@@ -1,6 +1,6 @@
 # This game: how it is built and where things go
 
-Made with the ref2game skill. Read `study/BRIEF.md` (what the game is) and `study/PERF.md` (its budgets) before changing anything.
+Made with the ref2game-boosted skill. Read `study/BRIEF.md` (what the game is) and `study/PERF.md` (its budgets) before changing anything.
 This file is the map for anyone (a person or an AI) who works on the game later.
 
 ## Run and check

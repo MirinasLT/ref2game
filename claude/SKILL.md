@@ -1,5 +1,5 @@
 ---
-name: ref2game
+name: ref2game-boosted
 description: Turn a reference (a screenshot, gameplay video, key art, concept art or mood image) into a live, playable 2D game slice that looks shipped, not like AI slop, and feels alive. Any 2D or 2.5D genre (platformer, top-down, isometric, beat-'em-up lanes, pseudo-3D road, shmup, puzzle, card/UI, runner…) and any style (pixel, painterly, cel/ink, flat vector, hand-drawn, watercolour, neon…). Art is AI-generated with whatever generator the user picks (Codex built-in image_gen, any image API researched and plugged in on the spot, a local tool, or manual drops). Effects, rigs, animation, wind, reactive objects, critters, game feel, camera and HUD are code in a tiny WebGL2 engine with a hot-reloading live preview. Independent critic agents check every asset, module, animation, frame and the play feel. Use this skill whenever the user wants to make a game, level, scene, prototype, vertical slice, playable demo, sprites, characters, backgrounds or an asset pack "like this", "in this style" or "from this reference", or wants to bring concept art to life as a game, even if they never say "game engine" or "asset pack". Not for 3D games.
 ---
 
