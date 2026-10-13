@@ -4,7 +4,7 @@
 // Serves the project over http itself (file:// images cannot be uploaded to WebGL), opens <page>?render=1 and calls
 // window.__renderAt(t) — the scene must be a pure function of t. Exit code 2 if the page logged errors.
 import http from 'node:http'; import fs from 'node:fs'; import path from 'node:path'; import { execFileSync } from 'node:child_process'; import { createRequire } from 'node:module';
-const here = path.dirname(new URL(import.meta.url).pathname);
+const here = import.meta.dirname;
 const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT || path.join(here, 'node_modules/playwright'));
 const root = process.cwd();
 const [mode, a2, ...rest] = process.argv.slice(2); const args = mode === 'stills' ? rest : [a2, ...rest].filter(Boolean);

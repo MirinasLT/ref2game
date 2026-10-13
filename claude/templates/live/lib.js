@@ -403,7 +403,8 @@ void main(){ vec2 p = (v_uv - 0.5) * u_sz; vec2 q = abs(p) - (u_sz * 0.5 - u_r);
     uni.u_tex = tx;
     if (L.sp) { const sp = L.sp, al = uni.u_alpha;
       uni.u_grade = sp.ink ? INK_GRADE : SH_GRADE; if (sp.ink) uni.u_haze = sp.ink; uni.u_alpha = sp.a * (al === undefined ? 1 : al);
-      uni.u_lod = sp.lod || 0; uni.u_rim = ZERO4; uni.u_tint = TINT0;
+      uni.u_lod = tx.src ? Math.min(sp.lod || 0, 3) : sp.lod || 0;   // atlased: mip 3 = the 8 px atlas pad, wider would blur in the neighbours
+      uni.u_rim = ZERO4; uni.u_tint = TINT0;
       x += sp.dx; y += sp.dy; if (o.m) o = Object.assign({}, o, { m: M.mul(M.t(sp.dx, sp.dy), o.m) }); }
     PADV[0] = PADV[1] = pad / (1 + 2 * pad); uni.u_pad = PADV;
     const at = tx.src;     // atlased texture: the requested rect lives inside the atlas rect
@@ -492,13 +493,13 @@ void main(){ vec2 p = (v_uv - 0.5) * u_sz; vec2 q = abs(p) - (u_sz * 0.5 - u_r);
   const LBL = {};
   const lblTex = (slot, str, { size = 30, col = '#f6e7c8', out = '#2d1315', font = '"Trebuchet MS", "Segoe UI", Verdana, sans-serif', weight = 'bold' } = {}) => {
     let r = LBL[slot]; const key = [str, size, col, out, font, weight].join('|'); if (r && r.key === key) return r;
-    const cv = document.createElement('canvas'), g = cv.getContext('2d'), f = `${weight} ${size}px ${font}`, pad = Math.ceil(size * 0.3);
+    const cv = r ? r.cv : document.createElement('canvas'), g = cv.getContext('2d'), f = `${weight} ${size}px ${font}`, pad = Math.ceil(size * 0.3);   // one canvas per slot
     g.font = f; const tw = g.measureText(str).width, w = Math.ceil(tw) + 2 * pad, h = Math.ceil(size * 1.3) + 2 * pad;
-    cv.width = Math.max(1, w); cv.height = h; g.font = f; g.textBaseline = 'middle'; g.lineJoin = 'round'; G.dirtyTex();
+    cv.width = Math.max(1, w); cv.height = h; g.font = f; g.textBaseline = 'middle'; g.lineJoin = 'round'; G.dirtyTex();   // resizing clears it
     g.fillStyle = 'rgba(15,5,8,0.6)'; g.fillText(str, pad, h / 2 + Math.max(2, size * 0.09));
     if (out) { g.lineWidth = Math.max(3, size * 0.16); g.strokeStyle = out; g.strokeText(str, pad, h / 2); }
     g.fillStyle = col; g.fillText(str, pad, h / 2);
-    if (!r) r = LBL[slot] = { rec: G.canvasTex('lbl_' + slot, cv) };
+    if (!r) r = LBL[slot] = { rec: G.canvasTex('lbl_' + slot, cv), cv };
     else { const gl = G.gl; gl.bindTexture(gl.TEXTURE_2D, r.rec.t); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, cv); gl.generateMipmap(gl.TEXTURE_2D); r.rec.w = w; r.rec.h = h; }
     Object.assign(r, { key, pad, tw }); return r; };
@@ -517,11 +518,18 @@ void main(){ vec2 p = (v_uv - 0.5) * u_sz; vec2 q = abs(p) - (u_sz * 0.5 - u_r);
       g.fillStyle = grd; g.fillText(c, cx, cv.height / 2 + 2); L.GLYPH[c] = [x / cv.width, ws[i]]; x += ws[i]; });
     G.canvasTex('glyphs', cv); L.GLYPH_H = cv.height;
   };
+  // one instanced draw per string (G.batch on the glyph texture); a drop-shadow / ink pass (L.sp) keeps the per-glyph sprites
+  const TXO = { alpha: 1, src: [0, 0, 1, 1] };
   L.text = (str, x, y, h, al = 0, alpha = 1) => {        // al: 0 left, 0.5 centre, 1 right
     const k = h / L.GLYPH_H, gw = G.tex('glyphs').w; let w = 0; for (const c of str) w += (L.GLYPH[c] || [0, 0])[1] * k * 0.86;
     let cx = x - w * al; if (alpha > 0.05) L.uiText(str, str, cx, y - h / 2, w, h);
+    if (L.ONLY.length && !L.ONLY.includes('glyphs')) return;
+    const B = L.sp ? null : G.batch('glyphs', 128); TXO.alpha = alpha;
     for (const c of str) { const g = L.GLYPH[c]; if (!g) { cx += h * 0.3; continue; }
-      L.sprite('glyphs', cx, y - h / 2, { w: g[1] * k, h, src: [g[0], 0, g[0] + g[1] / gw, 1], u: { alpha } }); cx += g[1] * k * 0.86; }
+      const s = TXO.src; s[0] = g[0]; s[2] = g[0] + g[1] / gw;
+      if (B) B.add(cx, y - h / 2, g[1] * k, h, TXO); else L.sprite('glyphs', cx, y - h / 2, { w: g[1] * k, h, src: s.slice(), u: { alpha } });
+      cx += g[1] * k * 0.86; }
+    if (B) B.flush();
   };
 
   // ---------------- frame pipeline ----------------

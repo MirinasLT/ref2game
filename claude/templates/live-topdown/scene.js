@@ -7,6 +7,8 @@
   S.programs = () => { L.init(W, H); L.glyphs(); L.SUN = [W * 0.2, -400]; };
   const TUFT = ['tuft_0', 'tuft_1', 'tuft_2'], DUST = [0.80, 0.74, 0.58], INK = [0.12, 0.08, 0.03];
   const SHADOW_DIR = [26, 14];                                  // light from the upper left: shadows fall right-down
+  const YS = [], YP = [], byY = (a, b) => a.y - b.y || a.n - b.n;      // ties keep add order: the replay never flickers
+  const ySort = (y, k, i) => { const n = YS.length, o = YP[n] || (YP[n] = { y: 0, k: 0, i: 0, n }); o.y = y; o.k = k; o.i = i; YS.push(o); };
 
   S.render = (t) => {
     const ST = S.state || SIM.at(t), GT = ST.t, SS = L.SS, rnd = L.rnd;
@@ -27,22 +29,27 @@
     // ground shadows of everything (one soft ellipse each), then the Y-sorted objects
     for (const [x, y, s] of SIM.TREES) L.shadow(sx(x) + SHADOW_DIR[0] * 3 * s, sy(y) - 30 * s + SHADOW_DIR[1] * 3, 150 * s, 90 * s, 0.35);
     for (const [x, y, s] of SIM.ROCKS) L.shadow(sx(x) + SHADOW_DIR[0] * s, sy(y) + SHADOW_DIR[1] * 0.5, 90 * s, 34 * s, 0.4);
-    const Y = [];                                                              // [ground y, draw]
-    SIM.TREES.forEach(([x, y, s]) => Y.push([y, () => { const h = 150 * s; L.sprite('tree_trunk', sx(x) - L.hsz('tree_trunk', h) / 2, sy(y) - h, { h, u: { rim: [0.3, -0.004, -0.004, 1] } }); }]));
-    SIM.ROCKS.forEach(([x, y, s]) => Y.push([y, () => { const h = 120 * s; L.sprite('rock', sx(x) - L.hsz('rock', h) / 2, sy(y) - h, { h, u: { rim: [0.35, -0.004, -0.004, 1] } }); }]));
-    SIM.TUFTS.forEach(([x, y, kind, th], i) => Y.push([y, () => { const n = TUFT[kind], f = ST.tf[i], w = L.hsz(n, th), fl = rnd(i, 12) > 0.5;
+    // Y-sort: one reused record per object (ground y, kind, index); no closure or array per object per frame
+    YS.length = 0;
+    SIM.TREES.forEach(([, y], i) => ySort(y, 0, i)); SIM.ROCKS.forEach(([, y], i) => ySort(y, 1, i));
+    SIM.TUFTS.forEach(([, y], i) => ySort(y, 2, i));
+    SIM.COINS.forEach(([, y], i) => { const g = ST.got[i]; if (g < 0 && g !== -2) ySort(y + 30, 3, i); });
+    ST.cr.forEach((c, i) => ySort(c.hop ? c.hop.y0 + (c.hop.y1 - c.hop.y0) * Math.min(1, (GT - c.hop.t0) / c.hop.dur) : c.y, 4, i));
+    ySort(ST.y, 5, 0);
+    const tree = (i) => { const [x, y, s] = SIM.TREES[i], h = 150 * s; L.sprite('tree_trunk', sx(x) - L.hsz('tree_trunk', h) / 2, sy(y) - h, { h, u: { rim: [0.3, -0.004, -0.004, 1] } }); };
+    const rock = (i) => { const [x, y, s] = SIM.ROCKS[i], h = 120 * s; L.sprite('rock', sx(x) - L.hsz('rock', h) / 2, sy(y) - h, { h, u: { rim: [0.35, -0.004, -0.004, 1] } }); };
+    const tuft = (i) => { const [x, y, kind, th] = SIM.TUFTS[i], n = TUFT[kind], f = ST.tf[i], w = L.hsz(n, th), fl = rnd(i, 12) > 0.5;
       const lean = Math.max(-0.34, Math.min(0.34, f[0] / w)) * (fl ? -1 : 1), hh = th * (1 - 0.45 * f[3]);       // flattened underfoot
-      L.sprite(n, sx(x) - w / 2, sy(y) - hh, { w, h: hh, pad: 0.36, flip: fl, u: { lean: [lean, 0], sway: [0.005 + 0.004 * Math.abs(wnd(x)), 5, t * (2 + rnd(i, 13)) + 6.28 * rnd(i, 11), 1], vfade: 0.15 } }); }]));
-    SIM.COINS.forEach(([x, y], i) => { const g = ST.got[i]; if (g >= 0 || g === -2) return;
-      Y.push([y + 30, () => { const b = 8 * Math.sin(t * 3 + i), cw = 46; L.shadow(sx(x), sy(y) + 30, 18, 6, 0.3); L.glow(sx(x), sy(y) - b, 50, [1, 0.7, 0.2], 0.25, 3.8);
-        L.sprite('coin', 0, 0, { m: M.of(M.t(sx(x), sy(y) - b), M.s(Math.cos(t * 2.4 + i), 1)), w: cw, h: cw, pivot: [cw / 2, cw / 2] }); }]); });
-    ST.cr.forEach((c, i) => { let x = c.x, y = c.y, z = 0, q = 1;
+      L.sprite(n, sx(x) - w / 2, sy(y) - hh, { w, h: hh, pad: 0.36, flip: fl, u: { lean: [lean, 0], sway: [0.005 + 0.004 * Math.abs(wnd(x)), 5, t * (2 + rnd(i, 13)) + 6.28 * rnd(i, 11), 1], vfade: 0.15 } }); };
+    const coin = (i) => { const [x, y] = SIM.COINS[i], b = 8 * Math.sin(t * 3 + i), cw = 46; L.shadow(sx(x), sy(y) + 30, 18, 6, 0.3); L.glow(sx(x), sy(y) - b, 50, [1, 0.7, 0.2], 0.25, 3.8);
+      L.sprite('coin', 0, 0, { m: M.of(M.t(sx(x), sy(y) - b), M.s(Math.cos(t * 2.4 + i), 1)), w: cw, h: cw, pivot: [cw / 2, cw / 2] }); };
+    const critter = (i) => { const c = ST.cr[i]; let x = c.x, y = c.y, z = 0, q = 1;
       if (c.hop) { const u = Math.min(1, (GT - c.hop.t0) / c.hop.dur); x = c.hop.x0 + (c.hop.x1 - c.hop.x0) * u; y = c.hop.y0 + (c.hop.y1 - c.hop.y0) * u; z = c.hop.ht * 4 * u * (1 - u); q = 1 + 0.15 * Math.sin(Math.PI * u); }
       else if (c.n >= 0) q = 0.88;                                             // noticed: crouch
-      Y.push([y, () => { const h = 54, w = L.hsz('critter', h); L.shadow(sx(x), sy(y), 22 * (1 - z / 90), 7, 0.4);
-        L.sprite('critter', 0, 0, { m: M.of(M.t(sx(x), sy(y) - z), M.s(c.face / Math.sqrt(q), q)), w, h, pivot: [w / 2, h * 0.95], u: { rim: [0.4, -0.004, -0.005, 1] } }); }]); });
+      const h = 54, w = L.hsz('critter', h); L.shadow(sx(x), sy(y), 22 * (1 - z / 90), 7, 0.4);
+      L.sprite('critter', 0, 0, { m: M.of(M.t(sx(x), sy(y) - z), M.s(c.face / Math.sqrt(q), q)), w, h, pivot: [w / 2, h * 0.95], u: { rim: [0.4, -0.004, -0.005, 1] } }); };
     // hero: body bob + lean into motion + two feet stepping (top-down rigs: body + feet + optional arms)
-    Y.push([ST.y, () => {
+    const hero = () => {
       const sp = Math.hypot(ST.vx, ST.vy), run = Math.min(1, sp / 200), ph = ST.dist / 70 * Math.PI, dash = GT - ST.dashT < 0.16;
       const bob = run * 7 * Math.abs(Math.sin(ph)), q = 1 + 0.04 * run * Math.cos(2 * ph) + (dash ? -0.1 : 0), lean = ST.vx * 0.0005;
       const hx = sx(ST.x), hy = sy(ST.y);
@@ -51,8 +58,9 @@
         for (const side of [-1, 1]) { const st = Math.sin(ph + (side > 0 ? 0 : Math.PI)) * run; L.shadow(hx + side * 13 + st * 8 * ST.faceX, hy - 4 - Math.max(0, st) * 6, 11, 7, L.sp ? 0 : 0.9); }
         const h = 110, w = L.hsz('hero_top', h);
         L.sprite('hero_top', 0, 0, { m: M.of(M.t(hx, hy - 8 - bob), M.r(lean), M.s(ST.faceX / Math.sqrt(q), q)), w, h, pivot: [w / 2, h], u: { rim: ST.faceX > 0 ? [0.5, -0.0035, -0.005, 1] : [0.5, 0.0035, -0.005, 1] } }); };
-      L.inked(draw, { r: 2.2, col: INK }); }]);
-    Y.sort((a, b) => a[0] - b[0]).forEach(([, d]) => d());
+      L.inked(draw, { r: 2.2, col: INK }); };
+    const DRAW = [tree, rock, tuft, coin, critter, hero];
+    YS.sort(byY); for (const o of YS) DRAW[o.k](o.i);
 
     // canopies above everything; fade when the hero walks under one (keeps the player readable)
     SIM.TREES.forEach(([x, y, s], i) => { const h = 380 * s, w = L.hsz('tree_canopy', h), top = y - 150 * s - h * 0.78;

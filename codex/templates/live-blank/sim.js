@@ -7,7 +7,7 @@
   const ITEMS = [[560, 420], [960, 360], [1360, 420], [560, 720], [960, 780], [1360, 720]], R = 80;   // hotspots and their hit radius
   const ROUTE = ITEMS.map((p, i) => [0.8 + i * 1.05, p]);                                          // attract: [click time, target]
 
-  const create = () => ({ t: 0, steps: 0, wt0: 0, x: VIEW.W / 2, y: VIEW.H / 2, press: 0, ev: [],
+  const create = () => ({ t: 0, steps: 0, wt0: 0, x: VIEW.W / 2, y: VIEW.H / 2, press: 0, pressT: -9, ev: [],
     got: ITEMS.map(() => -1),                               // -1 available, ≥0 time taken
     hov: ITEMS.map(() => [0, 0]) });                        // hover spring per item: [value, velocity]
   const spawn = (worldT) => Object.assign(create(), { wt0: worldT });
@@ -15,11 +15,15 @@
   function step(S, inp) {
     const t = S.t + DT;
     if (inp.px !== undefined) { S.x = inp.px; S.y = inp.py; }
-    S.press = inp.press ? 1 : 0;
+    const pr = inp.press ? 1 : 0;                           // press / release edges (drag and drop, hold-to-charge, aim-and-release)
+    if (pr && !S.press) { S.pressT = t; S.ev.push({ k: 'down', t, x: S.x, y: S.y }); }
+    if (!pr && S.press) S.ev.push({ k: 'up', t, x: S.x, y: S.y, held: t - S.pressT });
+    S.press = pr;
     ITEMS.forEach(([x, y], i) => { const on = S.got[i] === -1 && Math.hypot(S.x - x, S.y - y) < R, h = S.hov[i];
       h[1] += (300 * ((on ? (S.press ? 0.4 : 1) : 0) - h[0]) - 16 * h[1]) * DT; h[0] += h[1] * DT;      // underdamped: overshoot reads as "alive"
       if (on && inp.click) { S.got[i] = t; S.ev.push({ k: 'collect', t, x, y }); } });
-    if (inp.click && !S.ev.some((e) => e.t === t)) S.ev.push({ k: 'tap', t, x: S.x, y: S.y });
+    if (inp.click && !S.ev.some((e) => e.t === t && e.k === 'collect')) S.ev.push({ k: 'tap', t, x: S.x, y: S.y });
+    { const e = S.ev; let i = 0; while (i < e.length && t - e[i].t > 2) i++; if (e.length - i > 256) i = e.length - 256; if (i) e.splice(0, i); }   // events live ~2 s
     S.t = t; S.steps++; return S;
   }
 
@@ -37,6 +41,8 @@
     const S = cache.S; while (S.steps < n) step(S, scriptInput(S.t, S));
     return Object.assign({}, S, { loop, q });
   }
-  root.SIM = { DT, L, VIEW, ITEMS, R, create, spawn, step, at, scriptInput };
+  const CONTROLS = { move: null, buttons: [], pointer: true };     // pointer game: taps are the input, no virtual stick
+  const HINT = 'Click or tap to play · Esc menu', HINT_TOUCH = 'Tap to play';
+  root.SIM = { DT, L, VIEW, CONTROLS, HINT, HINT_TOUCH, ITEMS, R, create, spawn, step, at, scriptInput };
   if (typeof module !== 'undefined') module.exports = root.SIM;
 })(typeof window !== 'undefined' ? window : globalThis);

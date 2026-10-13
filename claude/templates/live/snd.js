@@ -14,7 +14,7 @@
   let ctx = null, out, sfxG, musG, noiseBuf, el = null, seq = null, live = 0;
   const set = () => window.SET || { music: true, sfx: true, vol: 0.8 };
   const D = () => window.SOUND || {};
-  const h = (n) => { const v = Math.sin(n * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); };
+  const h = (n) => { let x = Math.imul(Math.round(n * 1024) | 0, 0x9e3779b1); x ^= x >>> 15; x = Math.imul(x, 0x85ebca77); x ^= x >>> 13; x = Math.imul(x, 0xc2b2ae3d); x ^= x >>> 16; return (x >>> 0) / 4294967296; };
 
   // voice = { w: 'sine'|'square'|'triangle'|'sawtooth'|'noise', f: [from, to] Hz (noise: lowpass sweep), d: s, a: attack s,
   //           v: volume, lp / hp: fixed filter Hz, n: delay s, j: random detune ± semitones }. A sound = a voice or an array.
@@ -33,6 +33,14 @@
     rustle: { w: 'noise', f: [5200, 2400], d: 0.2, v: 0.05, hp: 1400, j: 2 },
     splash: [{ w: 'noise', f: [4000, 500], d: 0.35, v: 0.2 }, { w: 'sine', f: [500, 180], d: 0.12, v: 0.08 }],
   };
+  // jingle(notes, { w, root, bpm, v, lp }): a short tune as a voice set (win / game over / level up / unlock) — notes are
+  // [semitones from root, beats]; usable in SOUND.defs: { win: SND.jingle([[0, .5], [4, .5], [7, .5], [12, 1.5]], { w: 'square' }) }
+  A.jingle = (notes, { w = 'triangle', root = 72, bpm = 160, v = 0.12, lp = 4200 } = {}) => { const b = 60 / bpm; let t = 0;
+    return notes.map(([st, beats]) => { const f = 440 * 2 ** ((root + st - 69) / 12), vd = { w, f: [f, f], d: beats * b * 0.95, v, a: 0.006, lp, n: t }; t += beats * b; return vd; }); };
+  A.PRESETS.win = A.jingle([[0, 0.5], [4, 0.5], [7, 0.5], [12, 1.5]]);
+  A.PRESETS.lose = A.jingle([[7, 0.5], [3, 0.5], [0, 0.5], [-5, 1.5]], { w: 'square', root: 64, bpm: 130, v: 0.09, lp: 1800 });
+  // ducking: big moments push the music down for a moment (depth = music gain multiplier). A map entry can pass { duck: 0.5 }.
+  A.DUCK = { explode: 0.45, win: 0.2, lose: 0.2 };
 
   const noise = () => { if (noiseBuf) return noiseBuf; const n = ctx.sampleRate; noiseBuf = ctx.createBuffer(1, n, n);
     const d = noiseBuf.getChannelData(0); for (let i = 0; i < n; i++) d[i] = h(i * 0.37) * 2 - 1; return noiseBuf; };
@@ -68,11 +76,12 @@
       g.gain.value = o.v ?? 1; s.connect(g); g.connect(dest); s.start(now); live++; s.onended = () => { live--; g.disconnect(); }; return; }
     const def = (D().defs || {})[name] || A.PRESETS[name]; if (!def) return;
     for (const vd of [].concat(def)) voice(vd, dest, now, o);
+    const dk = o.duck ?? A.DUCK[name]; if (dk !== undefined && dk < 1) duck(dk, Math.max(0.5, ...[].concat(def).map((vd) => (vd.n || 0) + vd.d)));
   };
 
   // ev(e, camX): a sim event → its sound via SOUND.map (kind → name | (e) => name | [name, opts] | null), else DEFMAP; panned by screen x
   const DEFMAP = { jump: 'jump', land: (e) => ['land', { v: Math.min(1, (e.v || 900) / 1300) }], step: 'step', collect: 'coin',
-    hit: 'hit', hurt: 'hurt', shoot: 'shoot', explode: 'explode', rustle: 'rustle', splash: 'splash', power: 'power', dash: 'whoosh', tap: 'click' };
+    hit: 'hit', hurt: 'hurt', shoot: 'shoot', explode: 'explode', rustle: 'rustle', splash: 'splash', power: 'power', dash: 'whoosh', tap: 'click', win: 'win', gameover: 'lose' };
   A.ev = (e, camX = 0) => {
     if (!ctx) return;
     const gm = D().map || {}, m = e.k in gm ? gm[e.k] : DEFMAP[e.k];               // the game's map first (null = silent), then defaults
@@ -86,7 +95,10 @@
   // ---------------- music ----------------
   const SCALES = { major: [0, 2, 4, 5, 7, 9, 11], minor: [0, 2, 3, 5, 7, 8, 10], dorian: [0, 2, 3, 5, 7, 9, 10],
     lydian: [0, 2, 4, 6, 7, 9, 11], penta: [0, 2, 4, 7, 9], minpenta: [0, 3, 5, 7, 10], phrygian: [0, 1, 3, 5, 7, 8, 10] };
-  const MUS = { music: 1 };
+  const MUS = { music: 1 }, musV = () => (set().music ? (D().song || {}).v ?? 0.45 : 0);
+  const duck = (k, dur) => { const g = musG.gain, now = ctx.currentTime, v = musV(); if (!v) return;
+    g.cancelScheduledValues(now); g.setValueAtTime(g.value, now); g.linearRampToValueAtTime(v * k, now + 0.04);
+    g.setValueAtTime(v * k, now + dur); g.linearRampToValueAtTime(v, now + dur + 0.6); };
   const tone = (w, midi, t, d, v, a, lp) => voice({ w, f: [440 * 2 ** ((midi - 69) / 12), 440 * 2 ** ((midi - 69) / 12)], d, v, a, lp }, musG, t, MUS);
   // song: { bpm, root (MIDI), scale, prog: chord roots as scale degrees per bar, arp: 8 degrees per bar (null = rest),
   //         lead, bass, pad: waveforms (null = no part), density 0..1 } — 8 bars of A, then a sparser B, deterministic
@@ -116,7 +128,7 @@
   // apply(): settings or visibility changed → gains, suspend/resume, music on/off
   A.apply = () => {
     if (!ctx) return; const s = set(), sg = D().song || {};
-    out.gain.value = s.vol ?? 0.8; sfxG.gain.value = s.sfx ? 1 : 0; musG.gain.value = s.music ? sg.v ?? 0.45 : 0;
+    out.gain.value = s.vol ?? 0.8; sfxG.gain.value = s.sfx ? 1 : 0; musG.gain.cancelScheduledValues(0); musG.gain.value = s.music ? sg.v ?? 0.45 : 0;
     if ((!s.sfx && !s.music) || document.hidden) ctx.suspend(); else ctx.resume();
     music();
   };

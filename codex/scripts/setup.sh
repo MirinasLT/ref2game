@@ -5,8 +5,9 @@
 # 2. creates the project: art/{gen,raw,logs,prompts,requests}  live/  study/{crops,critique}  frames/  ref2game.json;
 #    --ref copies the user's reference to <project>/ref.png (the generator's style_ref): images converted to PNG, a video
 #    gives its middle frame (ffmpeg). Given explicitly, it replaces an existing ref.png;
-# 3. copies the live template (index.html, gl.js, lib.js, sim.js, scene.js, tune.cjs) — missing files only, or the
-#    engine files (gl.js, lib.js) again with --refresh-engine. --genre picks the starting sim.js/scene.js: side (side view),
+# 3. copies the live template — missing files only: the engine (index.html shell, gl.js, lib.js, settings.js, input.js, snd.js, collide.js),
+#    the game files (sim.js, scene.js, audio.js) and tune.cjs. --refresh-engine copies the engine files again (the old ones are
+#    kept as *.prev): settings/quality tiers, input (touch, gamepad), sound and the shell are engine, never edited per game. --genre picks the starting sim.js/scene.js: side (side view),
 #    top (top-down / 3/4), blank (an empty stage with pointer input). It is only a starting point for the game;
 # 4. draws placeholder art and preps it, so the live page runs before the first generation.
 set -euo pipefail
@@ -40,10 +41,14 @@ mkdir -p "$PROJ"/{art/gen,art/raw,art/logs,art/prompts,art/requests,live/assets,
 cp_new() { [ -e "$2" ] || cp "$1" "$2"; }
 case "$GENRE" in side) GT="$SKILL/templates/live";; top) GT="$SKILL/templates/live-topdown";; blank) GT="$SKILL/templates/live-blank";;
   *) echo "--genre must be side, top or blank"; exit 1;; esac
-for f in index.html tune.cjs; do cp_new "$SKILL/templates/live/$f" "$PROJ/live/$f"; done
+for f in tune.cjs; do cp_new "$SKILL/templates/live/$f" "$PROJ/live/$f"; done
 # stubs the page always loads: display sizes (written later from the art scale) and the sound module
 [ -e "$PROJ/live/sizes.js" ] || printf '// in-game sprite sizes in view px: { name: [w, h] } (engine.md §7 "Display size vs texture size")\nwindow.SIZES = window.SIZES || {};\n' > "$PROJ/live/sizes.js"
-[ -e "$PROJ/live/audio.js" ] || printf '// live/audio.js: sound driven by the sim event bus (S.ev). Stub until the game gets sound.\n' > "$PROJ/live/audio.js"
+[ -e "$PROJ/live/atlas.js" ] || printf '// written by scripts/atlas.py: name -> [atlas, u0, v0, u1, v1, w, h] (performance.md §1)
+window.ATLAS = window.ATLAS || {};
+' > "$PROJ/live/atlas.js"
+cp_new "$SKILL/templates/live/audio.js" "$PROJ/live/audio.js"          # this game's sound design (references/audio.md)
+mkdir -p "$PROJ/live/audio"
 [ "$GSET" = 1 ] && [ -e "$PROJ/live/sim.js" ] && echo "note: kept the existing live/sim.js and live/scene.js; to switch the base to --genre $GENRE, move them aside and re-run"
 for f in sim.js scene.js; do cp_new "$GT/$f" "$PROJ/live/$f"; done
 if [ -n "$REF" ]; then                                     # the user's reference → ref.png (style_ref of every generation)
@@ -58,7 +63,9 @@ if [ -n "$REF" ]; then                                     # the user's referenc
   [ -s "$PROJ/ref.png" ] || { echo "--ref: could not write $PROJ/ref.png from $REF"; exit 1; }
   echo "reference: $REF -> $PROJ/ref.png"
 fi
-for f in gl.js lib.js; do if [ "$REFRESH" = 1 ]; then cp "$SKILL/templates/live/$f" "$PROJ/live/$f"; else cp_new "$SKILL/templates/live/$f" "$PROJ/live/$f"; fi; done
+for f in index.html gl.js lib.js settings.js input.js snd.js collide.js; do
+  if [ "$REFRESH" = 1 ] && [ -e "$PROJ/live/$f" ] && ! cmp -s "$SKILL/templates/live/$f" "$PROJ/live/$f"; then cp "$PROJ/live/$f" "$PROJ/live/$f.prev"; cp "$SKILL/templates/live/$f" "$PROJ/live/$f"; echo "refreshed live/$f (old: $f.prev)"
+  else cp_new "$SKILL/templates/live/$f" "$PROJ/live/$f"; fi; done
 [ -f "$PROJ/ref2game.json" ] || cat > "$PROJ/ref2game.json" <<'JSON'
 {
   "generator": { "tool": "imagegen", "size": "1536x1024", "alpha": "auto", "opaque": ["bg_sky*", "*_tex"] },
@@ -77,6 +84,8 @@ STYLE BIBLE (replace after the study; keep it short, measured from the reference
 Light: <one fixed light sentence: key direction and colour, fill colour, no cast shadow>.
 Strict <projection/view>. No text, no logos, no watermark, no glow, no light rays, no cast shadows.
 TXT
+cp_new "$SKILL/templates/PERF.md" "$PROJ/study/PERF.md"        # the performance plan, filled in Phase 1 (performance.md §12)
+cp_new "$SKILL/templates/BRIEF.md" "$PROJ/study/BRIEF.md"      # the Step 0 answers (SKILL.md), read by every gate and critic
 (cd "$PROJ" && "$PYTHON" "$SKILL/scripts/placeholders.py" --out art/gen --set "$GENRE" >/dev/null && "$PYTHON" "$SKILL/scripts/prep.py" >/dev/null)
 echo "project ready: $PROJ"
 echo "  live preview : (cd $PROJ && bash $SKILL/scripts/serve.sh)      # prints the URL; keep it open while you work"

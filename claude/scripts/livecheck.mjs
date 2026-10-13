@@ -8,8 +8,9 @@
 //        [--scale 0.75] [--q low|mid|high] [--mobile] [--cpu 4] [--flow] [--vw 1920]
 // --mobile: a landscape phone (844×390 CSS px, DPR 3, touch, coarse pointer → touch controls, mid tier, render scale ≤ 0.75).
 // --cpu k: CPU slowed k× (CDP) — 4 ≈ a mid-range phone's main thread. --q: force a quality tier.
-// --flow: after the script, Esc opens the menu and the sim must stop, Esc resumes it, then a WebGL context loss must recover
-//   (page reloads, play state kept, no errors) — the lifecycle a phone puts the game through.
+// --flow: after the script, Esc opens the menu and the sim must stop, Esc resumes it; a result card pauses and Play again restarts
+//   the run; then a WebGL context loss must recover (page reloads, play state and a changed option kept, no errors) — the
+//   lifecycle a phone puts the game through.
 // Clears the saved session, starts play mode with the first input, runs the timed script, takes screenshots at --shots,
 // optionally touches sim.js to prove hot-reload keeps the play state (--reload), and prints one JSON line:
 // { errors, fps, perf, quality, touch, audio, flow, dev, evals, shots }. Exit code 2 on page errors, fps < --minfps or a failed flow.
@@ -94,11 +95,20 @@ if (args.includes('--flow')) {
   flow.pausedInMenu = a !== null && a === b;
   await p.keyboard.press('Escape'); await p.waitForTimeout(400); const c = await simT();
   flow.resumed = !(await p.evaluate(() => SETTINGS.open)) && c !== null && c > b;
+  // result card → Play again: the run restarts and the card is gone (a win / game-over flow that never strands the player)
+  const t0 = await simT(); await p.evaluate(() => SETTINGS.result({ title: 'QA', lines: [] })); await p.waitForTimeout(250);
+  const r1 = await simT(), card = await p.evaluate(() => SETTINGS.open && SETTINGS.mode === 'result'); await p.waitForTimeout(250);
+  const r2 = await simT(); await p.keyboard.press('Enter'); await p.waitForTimeout(400); const r3 = await simT();
+  flow.result = { card, paused: r1 !== null && r1 === r2, restarted: !(await p.evaluate(() => SETTINGS.open)) && r3 !== null && r3 < Math.max(t0, r2) };
+  flow.resultOk = flow.result.card && flow.result.paused && flow.result.restarted;
+  // a changed option must survive the reload below
+  const shake = await p.evaluate(() => { SET.shake = !SET.shake; SETTINGS.apply(); return SET.shake; });
   const lose = await p.evaluate(() => { const x = G.gl.getExtension('WEBGL_lose_context'); if (!x) return false; x.loseContext(); setTimeout(() => x.restoreContext(), 300); return true; });
   if (lose) { await p.waitForTimeout(800); await p.waitForFunction(() => window.__ready === true, null, { timeout: 30000 }).catch(() => {}); await p.waitForTimeout(800);
     flow.contextLoss = await p.evaluate(() => ({ ready: window.__ready === true, playing: !!(window.SCENE && SCENE.state) }));
-    flow.contextLossOk = flow.contextLoss.ready && flow.contextLoss.playing; }
-  flow.ok = flow.playing && flow.menuOpen && flow.pausedInMenu && flow.resumed && (!lose || flow.contextLossOk);
+    flow.contextLossOk = flow.contextLoss.ready && flow.contextLoss.playing;
+    flow.settingsKept = await p.evaluate((v) => window.SET && SET.shake === v, shake); }
+  flow.ok = flow.playing && flow.menuOpen && flow.pausedInMenu && flow.resumed && flow.resultOk && (!lose || (flow.contextLossOk && flow.settingsKept));
 }
 console.log(JSON.stringify({ errors, fps, perf, ...extra, flow, dev, reload, evals, shots: files }));
 await browser.close(); if (srv) srv.close(); if (errors.length || fps < +opt('minfps', 55) || (flow && !flow.ok)) process.exit(2);

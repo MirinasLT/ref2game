@@ -109,6 +109,8 @@ The rule from the GDC talk "Juice it or lose it": every player action produces *
 
 Verify each event on an age strip (`render.mjs stills` from the event's first frame onward): all three time scales are present, and the instant layer lands on the frame of the action, not after it.
 
+**Sound is the fourth layer of every row:** the same event drives a sound through `SOUND.map` (`audio.md`), scaled by the event (land volume by speed, pitch rising along a pickup streak). Write the sound in the same change as the FX; a verb with FX and no sound feels unfinished.
+
 ## 5. Living ambience without wallpaper
 
 - **One shared wind field with gust fronts** that cross the scene (`effects.md` §3). A shared cause turns dozens of loops into one world.
@@ -142,4 +144,7 @@ Play it with `livecheck.mjs` scripts, then let the game critic play it (`critics
 - [ ] Nothing loops on an exact, visible period.
 - [ ] Goals read: targets or pickups trace the route, the HUD reacts, and failure keeps progress.
 - [ ] The attract demo shows the best interactions within its loop and passes `tune.cjs`.
+- [ ] Every verb has a sound, and frequent sounds are quiet (`audio.md` §3, §6).
+- [ ] It plays on every platform the brief names: keyboard, touch (`livecheck.mjs --mobile`: the stick and buttons do every verb, nothing important under a thumb) and a gamepad.
+- [ ] The flow is complete: menu (pause, restart, options), a win / game-over card when the game has an end, back to title; `livecheck.mjs --flow` passes.
 - [ ] The hand-back says what to try.

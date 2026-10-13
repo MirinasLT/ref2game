@@ -35,6 +35,9 @@ An author judging their own work misses what the user sees at once. Weak parts t
   9. **No placeholder tells:** debug overlays, default fonts, unstyled rectangles, programmer-coloured shapes, untranslated strings, mixed languages.
   10. **States read at a glance:** every tool, hazard and resource has a visible state and a reaction (`gamefeel.md` §7).
   11. **No primitive-shape effects:** cracks, slashes, beams, shockwaves, debris and magic made of straight bars, plain rectangles, uniform lines or flat rings read as programmer art. Effects are shaped, layered, and change over their life. Judge each one on an age strip (frames sampled across its life), magnified.
+  12. **Complete flow:** the menu opens and pauses, options apply at once, a win / game-over card appears when the game ends, Play again and Title work, nothing is stuck after a restart.
+  13. **Phone-ready:** on the `--mobile` shots the touch controls are readable, reachable by thumbs and don't cover the hero's path or the HUD; the HUD stays legible at the phone's size; the low tier (`--q low`) keeps every gameplay cue (nothing important lives only in bloom, rays or particles).
+  14. **Sound:** every verb and every UI action is heard, matched to the art (`audio.md` §2), frequent sounds quiet, music under the game.
 
 ---
 
@@ -179,7 +182,8 @@ The critic that answers the user's real question.
 **Inputs:**
 - `livecheck.mjs` runs with key scripts it designs: walk into every object, jump on everything, idle long enough to see loops repeat, wait for the world's shared causes (a gust…);
 - `livecheck.mjs` screenshots and `render.mjs stills` of the attract loop;
-- `gamefeel.md`.
+- `study/BRIEF.md` (platform, goal, fail loop, sound): for phone or universal briefs it also plays `livecheck.mjs --mobile` touch scripts (stick + buttons) and runs `--flow`;
+- `gamefeel.md`, `audio.md`.
 
 **Scores (1–10):**
 - **Readability:** play plane vs background, walk lines, roles.
@@ -187,6 +191,8 @@ The critic that answers the user's real question.
 - **Aliveness:** reactions, shared causes, no visible loops.
 - **Depth:** camera travel, parallax, planes.
 - **Lighting:** consistency, moving lights.
+- **Controls (per device in the brief):** keyboard, touch, pad: every verb reachable, nothing under a thumb, responsive.
+- **Sound:** every verb heard, fits the art, frequent sounds quiet (from the `audio` stats and the map).
 - **Style consistency.**
 - **Motion.**
 - **Overall:** "does it pass as a screenshot or clip of a real game?"

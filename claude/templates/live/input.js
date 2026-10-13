@@ -9,7 +9,27 @@
   const I = (window.INPUT = { hasTouch: false, device: 'key' });
   const KEYS = { left: ['ArrowLeft', 'KeyA'], right: ['ArrowRight', 'KeyD'], up: ['ArrowUp', 'KeyW'], down: ['ArrowDown', 'KeyS'],
     jump: ['Space'], act: ['KeyX', 'KeyJ', 'Enter'], alt: ['KeyC', 'KeyK'] };
-  const ACTS = Object.keys(KEYS), CODE = {}; for (const a of ACTS) for (const c of KEYS[a]) CODE[c] = a;
+  const ACTS = Object.keys(KEYS), CODE = {}, DEFKEYS = {}; for (const a of ACTS) DEFKEYS[a] = KEYS[a].slice();
+  // remapped keys (menu → Controls) live in SET.keys = { action: code }: that code becomes the action's first key and leaves
+  // every other action; the remaining defaults stay as alternatives
+  const rebuild = () => { for (const c in CODE) delete CODE[c]; const ov = (window.SET && SET.keys) || {}, taken = Object.values(ov);
+    for (const a of ACTS) { const d = DEFKEYS[a].filter((c) => !taken.includes(c)); KEYS[a] = ov[a] ? [ov[a], ...d] : d; for (const c of KEYS[a]) CODE[c] = a; } };
+  rebuild();
+  I.KEYS = KEYS;
+  I.LABEL = { left: 'Left', right: 'Right', up: 'Up', down: 'Down', jump: 'Jump', act: 'Action', alt: 'Second action' };
+  I.RESERVED = /^(Escape|Tab|F\d+|Meta.*|Control.*|Alt.*|Shift.*|CapsLock|ContextMenu)$/;    // never bindable
+  I.bind = (a, code) => { if (I.RESERVED.test(code) || !ACTS.includes(a)) return false; SET.keys = Object.assign({}, SET.keys, { [a]: code }); rebuild(); return true; };
+  I.resetKeys = () => { SET.keys = null; rebuild(); };
+  // the actions this game uses (moves from SIM.CONTROLS.move, one per button): what the Controls screen lists
+  I.binds = () => [...(!C || C.move === 'xy' ? ['left', 'right', 'up', 'down'] : C.move === 'x' ? ['left', 'right', 'down'] : []),
+    ...((C && C.buttons) || []).map((b) => b[0]).filter((a) => ACTS.includes(a))];
+  const KN = { Space: 'Space', ArrowLeft: '←', ArrowRight: '→', ArrowUp: '↑', ArrowDown: '↓', Enter: 'Enter', Backspace: '⌫' };
+  I.keyName = (code) => (code ? KN[code] || code.replace(/^(Key|Digit|Numpad)/, '') : '—');
+  // glyph(action): what to print in prompts for the device used last ("Press A", "Press Space", the touch button's label)
+  const PADG = { jump: 'A', act: 'X', alt: 'B', left: '←', right: '→', up: '↑', down: '↓' };
+  I.glyph = (a) => { if (I.device === 'pad') return PADG[a] || a;
+    if (I.device === 'touch') { const b = ((C && C.buttons) || []).find((x) => x[0] === a); return b ? b[1] || a[0].toUpperCase() : PADG[a] || a; }
+    return I.keyName(KEYS[a] && KEYS[a][0]); };
   const held = {}, latch = {}, tch = {}, pad = {}, ptr = { x: 0, y: 0, down: 0, pl: 0, click: 0 }, pend = { slot: 0, wheel: 0 };
   let cv = null, VW = 1920, VH = 1080, C = null, padOn = false, stick = null, ui = null, touchSeen = false;
   const coarse = () => !!(window.matchMedia && matchMedia('(pointer: coarse)').matches);
@@ -82,6 +102,9 @@
 #r2gt .b.on{opacity:1;transform:scale(.9);background:#fff4}
 #r2gt .menu{position:absolute;top:calc(10px + env(safe-area-inset-top));right:calc(10px + env(safe-area-inset-right));width:48px;height:48px;
   pointer-events:auto;border-radius:12px;background:#0005;border:2px solid #fff6;color:#fff;font:700 20px system-ui;display:flex;align-items:center;justify-content:center}`;
+  const ctl = () => Object.assign({ move: 'xy', buttons: [['jump', 'A'], ['act', 'B']], pointer: true }, (window.SIM && SIM.CONTROLS) || {});
+  // primary button bottom-right, the rest on an arc up-left of it (thumb reach): [x, y, size] from the bottom-right corner
+  const POS = [[0, 0, 96], [-104, 26, 80], [-14, -100, 80], [-112, -78, 72]];
   const build = () => {
     const st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
     const root = document.createElement('div'); root.id = 'r2gt'; document.body.appendChild(root);
@@ -112,9 +135,8 @@
     }
     const box = document.createElement('div'); box.className = 'btns'; root.appendChild(box);
     // primary button bottom-right, the rest on an arc up-left of it (thumb reach)
-    const pos = [[0, 0, 96], [-104, 26, 80], [-14, -100, 80], [-112, -78, 72]];
     (C.buttons || []).slice(0, 4).forEach(([a, label], i) => {
-      const [x, y, s] = pos[i], b = document.createElement('div'); b.className = 'b'; b.textContent = label || a[0].toUpperCase();
+      const [x, y, s] = POS[i], b = document.createElement('div'); b.className = 'b'; b.textContent = label || a[0].toUpperCase();
       Object.assign(b.style, { width: s + 'px', height: s + 'px', right: -x + 'px', bottom: -y + 'px' }); b.setAttribute('aria-label', a);
       const on = (e) => { kill(e); I.device = 'touch'; touchSeen = true; tch[a] = 1; latch[a] = 1; b.classList.add('on'); b.setPointerCapture(e.pointerId);
         if (navigator.vibrate) try { navigator.vibrate(8); } catch (x) { /* not allowed */ } start(); };
@@ -127,13 +149,23 @@
   // show the overlay: Touch controls = On, or Auto on a touch screen (coarse pointer or a touch seen)
   I.refresh = () => { if (!ui) return; const s = (window.SET || {}).touch ?? 'auto';
     ui.root.classList.toggle('on', s === true || (s === 'auto' && (coarse() || touchSeen))); };
+  // zones(VW, VH, pw, ph): where the touch controls sit on a phone page (844×390 CSS px landscape by default), as view-px rects
+  // [{ id, x, y, w, h }] — qa.mjs fails HUD text under a thumb. Same layout numbers as the overlay (buttons, menu, resting stick).
+  I.zones = (vw, vh, pw = vw >= vh ? 844 : 390, ph = vw >= vh ? 390 : 844) => {
+    const c = ctl(), ar = vw / vh, cw = Math.min(pw, ph * ar), ch = cw / ar, ox = (pw - cw) / 2, oy = (ph - ch) / 2, k = vw / cw, out = [];
+    const add = (id, l, t, w, h) => out.push({ id, x: (l - ox) * k, y: (t - oy) * k, w: w * k, h: h * k });
+    if (!(c.move || (c.buttons && c.buttons.length))) return out;
+    (c.buttons || []).slice(0, 4).forEach(([a], i) => { const [x, y, s] = POS[i]; add('touch:' + a, pw - 18 + x - s, ph - 18 + y - s, s, s); });
+    add('touch:menu', pw - 58, 10, 48, 48);
+    if (c.move) add('touch:stick', pw * 0.14 - 64, ph * 0.74 - 64, 128, 128);
+    return out; };
   // rect of an on-screen button in page px (livecheck taps it)
   I.btnRect = (a) => { const b = ui && ui.btn[a]; if (!b) return null; const r = b.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; };
 
   // init(canvas, VW, VH): pointer in view px on the canvas; touch overlay when SIM.CONTROLS asks for a stick or buttons
   I.init = (canvas, w, h) => {
     cv = canvas; VW = w; VH = h; ptr.x = w / 2; ptr.y = h / 2;
-    C = Object.assign({ move: 'xy', buttons: [['jump', 'A'], ['act', 'B']], pointer: true }, (window.SIM && SIM.CONTROLS) || {});
+    C = ctl();
     I.hasTouch = !!(C.move || (C.buttons && C.buttons.length));
     if (I.hasTouch) { build(); I.refresh(); }
     addEventListener('pointermove', (e) => { if (e.pointerType === 'touch' && !C.pointer) return; toView(e); });

@@ -29,7 +29,7 @@ canvas{display:block;width:min(100vw,calc(100vh*var(--ar)));height:auto;aspect-r
 // ?render=1 exposes window.__renderAt(t) for render.mjs (no loop, no polling); ?perf=1 shows the perf overlay; ?q=low|mid|high.
 const V = Date.now(), STATIC = !!window.__STATIC__;          // STATIC: packed build (no polling, no dev keys, no dev overlay)
 const load = (src) => new Promise((res, rej) => { const s = document.createElement('script'); s.src = src + '?v=' + V; s.onload = res; s.onerror = () => rej(new Error('failed ' + src)); document.head.appendChild(s); });
-const SRC = ['assets.js', 'sizes.js', 'atlas.js', 'settings.js', 'gl.js', 'lib.js', 'input.js', 'snd.js', 'sim.js', 'scene.js', 'audio.js'];
+const SRC = ['assets.js', 'sizes.js', 'atlas.js', 'settings.js', 'gl.js', 'lib.js', 'input.js', 'snd.js', 'collide.js', 'sim.js', 'scene.js', 'audio.js'];
 (async () => {
   // sizes.js: window.SIZES (display size per sprite, engine.md §7); atlas.js: window.ATLAS (scripts/atlas.py); audio.js: window.SOUND
   for (const f of SRC) await load(f);
@@ -43,6 +43,20 @@ const SRC = ['assets.js', 'sizes.js', 'atlas.js', 'settings.js', 'gl.js', 'lib.j
   await Promise.all([...Object.keys(ASSETS).filter((n) => !AT[n]), ...sheets]
     .map((n) => G.load(n, 'assets/' + n + '.png?v=' + V, { repeat: rep.has(n), nearest: near(n) })));
   SCENE.programs();
+  // attract demo interpolation: SIM.at(t) returns whole steps; blend the SIM.LERP keys between the two steps around t, so the
+  // demo is as smooth as play at 144 Hz and render.mjs frames land between steps
+  const LERP = SIM.LERP || ['x', 'y', 'cam', 't'], near400 = (a, b) => Math.abs(b - a) < 400;     // larger jumps are teleports
+  if (SIM.at) { const at0 = SIM.at, pa = {}, ta = {};
+    SIM.at = (t) => { const k = t / SIM.DT, n = Math.floor(k + 1e-6), al = k - n;
+      if (al < 1e-3) return at0(n * SIM.DT);
+      const A = at0(n * SIM.DT);
+      for (const key of LERP) { const v = A[key]; if (Array.isArray(v)) { const p = pa[key] || (pa[key] = []); p.length = v.length; for (let i = 0; i < v.length; i++) p[i] = v[i]; } else pa[key] = v; }
+      const B = at0((n + 1) * SIM.DT); if (B.loop !== A.loop) return B;
+      for (const key of LERP) { const a = pa[key], b = B[key];
+        if (typeof a === 'number' && typeof b === 'number') { if (near400(a, b)) B[key] = a + (b - a) * al; }
+        else if (Array.isArray(a) && Array.isArray(b) && a.length === b.length) { const o = ta[key] || (ta[key] = []); o.length = b.length;   // never write into the sim's cache
+          for (let i = 0; i < b.length; i++) o[i] = near400(a[i], b[i]) ? a[i] + (b[i] - a[i]) * al : b[i]; B[key] = o; } }
+      return B; }; }
   window.__duration = SIM.L;
   window.__renderAt = (t) => { SCENE.render(t); return document.getElementById('c').toDataURL('image/png'); };
   window.__ready = true;
@@ -63,13 +77,20 @@ const SRC = ['assets.js', 'sizes.js', 'atlas.js', 'settings.js', 'gl.js', 'lib.j
       flash.textContent = sv.play && !play ? 'reloaded (sim changed: new run)' : 'reloaded';
       if (!STATIC) { flash.style.opacity = 1; setTimeout(() => (flash.style.opacity = 0), 1400); } } } catch (e) { console.warn('restore', e); }
   const save = () => { try { sessionStorage.setItem('live', JSON.stringify({ simT, speed, paused: devPause, play, ver: SIM.VERSION ?? null })); } catch (e) {} };
+  // persistent progress (best score, unlocked levels): SIM.SAVE(play, prev) → the object to keep, called on win / gameover /
+  // 'save' events and when the page is hidden; it reaches the sim as SIM.spawn(worldT, PROGRESS) and SIM.RESULT(e, play, PROGRESS)
+  const PKEY = 'r2g:save:' + location.pathname.replace(/index\.html$/, '');
+  let PROGRESS = {}; try { PROGRESS = JSON.parse(localStorage.getItem(PKEY) || '{}') || {}; } catch (e) { PROGRESS = {}; }
+  window.__progress = () => PROGRESS;
+  const keep = () => { if (!play || !SIM.SAVE) return; try { PROGRESS = SIM.SAVE(play, PROGRESS) || PROGRESS; localStorage.setItem(PKEY, JSON.stringify(PROGRESS)); } catch (e) { console.warn('save', e); } };
+  const spawn = () => SIM.spawn(simT, PROGRESS);
   let wantFs = false;                                                   // fullscreen waits for the activating pointerup
-  const begin = () => { if (play || SETTINGS.open) return; play = SIM.spawn(simT); evT = -1; hint.style.opacity = 0; INPUT.clear();
+  const begin = () => { if (play || SETTINGS.open) return; play = spawn(); evT = -1; hint.style.opacity = 0; INPUT.clear();
     wantFs = touchy && STATIC && SIM.FULLSCREEN !== false && !document.fullscreenElement; };
   const toTitle = () => { play = null; SCENE.state = null; hint.style.opacity = 1; };
   INPUT.init(cvs, VW, VH); INPUT.onStart = begin;
   INPUT.onGesture = () => { if (wantFs) { wantFs = false; SETTINGS.fullscreen(true); } };
-  Object.assign(SETTINGS.on, { pause: (on) => { menuPause = on; }, restart: () => { play = SIM.spawn(simT); evT = -1; hint.style.opacity = 0; INPUT.clear(); }, title: toTitle });
+  Object.assign(SETTINGS.on, { pause: (on) => { menuPause = on; }, restart: () => { keep(); play = spawn(); evT = -1; hint.style.opacity = 0; INPUT.clear(); }, title: () => { keep(); toTitle(); } });
   addEventListener('keydown', (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
     const c = e.code;
@@ -81,21 +102,21 @@ const SRC = ['assets.js', 'sizes.js', 'atlas.js', 'settings.js', 'gl.js', 'lib.j
       if (c === 'BracketRight') { speed = SPEEDS[Math.min(SPEEDS.length - 1, SPEEDS.indexOf(speed) + 1)]; return; }
     }
     if (c === 'Escape') { if (play) SETTINGS.openMenu(); return; }
-    if (c === 'KeyR' && play) { SETTINGS.on.restart(); return; }
+    if (c === 'KeyR' && play && !INPUT.isAction(c)) { SETTINGS.on.restart(); return; }   // unless R was bound to an action
     if (c === 'Tab' || /^F\d+$/.test(c)) return;
     SND.unlock(); begin();
   });
   // a hidden tab pauses the game (menu up on return); a lost GL context (phones evict it in the background) reloads the page
   // with the play state kept, the only reliable way to rebuild every texture, program and target
-  document.addEventListener('visibilitychange', () => { if (document.hidden && play && !SETTINGS.open) SETTINGS.openMenu(); last = -1; });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) keep(); if (document.hidden && play && !SETTINGS.open) SETTINGS.openMenu(); last = -1; });
   cvs.addEventListener('webglcontextlost', (e) => { e.preventDefault(); lost = true; save();
     setTimeout(() => lost && location.reload(), 3000); });                // some browsers (iOS) never send contextrestored
   cvs.addEventListener('webglcontextrestored', () => location.reload());
 
   // render interpolation: SCENE.state is a view of play between the previous and the current step (alpha = acc / DT)
-  const LERP = SIM.LERP || ['x', 'y', 'cam', 't'], prev = {}, view = {}, inp = {};
+  const prev = {}, view = {}, inp = {};
   let lastPlay = null;
-  const tmp = {}, near400 = (a, b) => Math.abs(b - a) < 400;                         // larger jumps are teleports: no blend
+  const tmp = {};
   const snap = () => { for (const k of LERP) { const v = play[k];
     if (Array.isArray(v)) { const p = Array.isArray(prev[k]) ? prev[k] : (prev[k] = []); p.length = v.length; for (let i = 0; i < v.length; i++) p[i] = v[i]; }
     else prev[k] = v; } };
@@ -108,7 +129,8 @@ const SRC = ['assets.js', 'sizes.js', 'atlas.js', 'settings.js', 'gl.js', 'lib.j
   const RESULT = { win: 'Level complete', gameover: 'Game over' };
   const events = () => { for (const e of play.ev) { if (e.t <= evT) continue;
       SND.ev(e, Array.isArray(play.cam) ? play.cam[0] : typeof play.cam === 'number' ? play.cam : 0);
-      if (RESULT[e.k]) SETTINGS.result(SIM.RESULT ? SIM.RESULT(e, play) : { title: RESULT[e.k], lines: e.score !== undefined ? ['Score ' + e.score] : [] }); }
+      if (RESULT[e.k] || e.k === 'save') keep();
+      if (RESULT[e.k]) SETTINGS.result(SIM.RESULT ? SIM.RESULT(e, play, PROGRESS) : { title: RESULT[e.k], lines: e.score !== undefined ? ['Score ' + e.score] : [] }); }
     evT = play.t; };
   const crash = (err) => { console.error(err); if (!STATIC) { flash.textContent = 'sim error: ' + err.message + ' (fix sim.js, the page reloads)'; flash.style.color = '#f88'; flash.style.opacity = 1; } toTitle(); };
 
@@ -143,7 +165,7 @@ const SRC = ['assets.js', 'sizes.js', 'atlas.js', 'settings.js', 'gl.js', 'lib.j
       }
       if (play) {
         events();
-        if (SIM.outOfPlay && SIM.outOfPlay(play)) { play = SIM.respawn ? SIM.respawn(play, simT) : SIM.spawn(simT); evT = -1; snap(); lastPlay = play; }
+        if (SIM.outOfPlay && SIM.outOfPlay(play)) { play = SIM.respawn ? SIM.respawn(play, simT, PROGRESS) : spawn(); evT = -1; snap(); lastPlay = play; }
         SCENE.state = viewOf(Math.max(0, Math.min(1, acc / SIM.DT)));
       }
     } else SCENE.state = null;

@@ -9,7 +9,8 @@
 // and window.__ANCHORS ({ name, sim:[x,y], drawn:[x,y], tol, d }: where the sim emits from vs where the holder is drawn).
 // lib.js fills both: L.label / L.text record texts, L.uiBox(...) containers, L.anchor(...) emitters; beginBG resets them.
 // Checks:
-//   ui       every text lies inside a container (with its pad) and on screen; texts don't overlap each other
+//   ui       every text lies inside a container (with its pad) and on screen; texts don't overlap each other or sit under the
+//            phone's touch controls (INPUT.zones: buttons, menu, resting stick on an 844×390 page)
 //   anchors  every emitter is drawn where the sim emits from (d <= tol)
 //   motion   every walk cycle really moves its limbs: the actor is isolated (its sprites only vs none), each frame is aligned to
 //            frame 0 on the upper body, and the lower body must change (a bobbing / sliding whole sprite fails); also writes a
@@ -30,7 +31,7 @@
 //              state (the picture sweeps or strobes, e.g. a phase computed as rate(state) · t instead of integrated over time).
 // Writes <out>/<state>.png, <out>/cycle_<name>.png and <out>/report.json.
 import http from 'node:http'; import fs from 'node:fs'; import path from 'node:path'; import { createRequire } from 'node:module';
-const here = path.dirname(new URL(import.meta.url).pathname);
+const here = import.meta.dirname;
 const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT || path.join(here, 'node_modules/playwright'));
 const args = process.argv.slice(2), opt = (k, d) => { const i = args.indexOf('--' + k); return i >= 0 ? args[i + 1] : d; };
 const out = opt('out', 'frames/qa'), only = opt('only', 'ui,anchors,motion,rig,anim').split(','); fs.mkdirSync(out, { recursive: true });
@@ -44,6 +45,7 @@ const errors = []; p.on('pageerror', (e) => errors.push(e.message)); p.on('conso
 await p.goto(`http://127.0.0.1:${srv.address().port}/live/index.html?render=1`);
 await p.waitForFunction(() => window.__ready, null, { timeout: 30000 });
 const hasQA = await p.evaluate(() => typeof SCENE.QA === 'function');
+const [VW, VH] = await p.evaluate(() => [(SIM.VIEW || {}).W || 1920, (SIM.VIEW || {}).H || 1080]);   // the game's view (portrait games too)
 const fails = [], warns = [], report = { states: {}, cycles: {} };
 if (!hasQA) fails.push('SCENE.QA() missing: the scene must list its HUD states and walk cycles (references/engine.md §7, "QA hooks")');
 const save = (f, url) => fs.writeFileSync(f, Buffer.from(url.split(',')[1], 'base64'));
@@ -51,6 +53,9 @@ const save = (f, url) => fs.writeFileSync(f, Buffer.from(url.split(',')[1], 'bas
 if (hasQA) {
   // ---- HUD states: layout + anchors ----
   const names = await p.evaluate(() => { window.__QA = SCENE.QA(); return window.__QA.states.map((s) => s[0]); });
+  // where a phone's thumbs and touch buttons sit (input.js zones): HUD text there is unreadable while playing
+  const zones = await p.evaluate(([w, h]) => (window.INPUT && INPUT.zones ? INPUT.zones(w, h) : []), [VW, VH]);
+  const meets = (a, b) => Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) > 2 && Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) > 2;
   for (let i = 0; i < names.length; i++) {
     const r = await p.evaluate((i) => { const [, st] = window.__QA.states[i]; SCENE.state = st;
       try { SCENE.render(st.t + 0.01); } catch (e) { return { err: e.message + ' @ ' + (e.stack || '').split('\n')[1] }; }
@@ -60,7 +65,7 @@ if (hasQA) {
       const texts = r.ui.filter((u) => u.k === 'text'), boxes = r.ui.filter((u) => u.k === 'box');
       if (!r.ui.length) warns.push(`${name}: no __UI records (HUD text is not checked)`);
       for (const t of texts) {
-        if (t.x < 0 || t.y < 0 || t.x + t.w > 1920 || t.y + t.h > 1080) fails.push(`${name}: text "${t.s}" leaves the screen`);
+        if (t.x < 0 || t.y < 0 || t.x + t.w > VW || t.y + t.h > VH) fails.push(`${name}: text "${t.s}" leaves the screen`);
         const cxy = [t.x + t.w / 2, t.y + t.h / 2], inb = boxes.filter((b) => cxy[0] >= b.x && cxy[0] <= b.x + b.w && cxy[1] >= b.y && cxy[1] <= b.y + b.h);
         if (!inb.length) { warns.push(`${name}: text "${t.s}" has no container`); continue; }
         const b = inb.sort((a, c) => a.w * a.h - c.w * c.h)[0], pad = b.pad || 0;
@@ -68,6 +73,8 @@ if (hasQA) {
         const overY = Math.max(b.y - t.y - t.h * 0.15, t.y + t.h * 0.85 - (b.y + b.h), 0);           // glyph box has some air top/bottom
         if (over > 1 || overY > 1) fails.push(`${name}: text "${t.s}" overflows "${b.id}" by ${Math.round(Math.max(over, overY))} px`);
       }
+      for (const z of zones) { for (const t of texts) if (meets(t, z)) fails.push(`${name}: text "${t.s}" sits under the phone's ${z.id} (move it or the HUD panel)`);
+        for (const b of boxes) if (meets(b, z)) warns.push(`${name}: HUD panel "${b.id}" is partly under the phone's ${z.id}`); }
       for (let a = 0; a < texts.length; a++) for (let b = a + 1; b < texts.length; b++) { const A = texts[a], B = texts[b];
         const ix = Math.min(A.x + A.w, B.x + B.w) - Math.max(A.x, B.x), iy = Math.min(A.y + A.h * 0.85, B.y + B.h * 0.85) - Math.max(A.y + A.h * 0.15, B.y + B.h * 0.15);
         if (ix > 2 && iy > 2) fails.push(`${name}: texts "${A.s}" and "${B.s}" overlap`); }

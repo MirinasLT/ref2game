@@ -27,12 +27,12 @@ pixel-identical against the old engine).
 - ✅ Events are pruned by age (2 s, cap 256) instead of a 64 cap that lost FX in bursts. `tune.cjs` collects events as they
   appear.
 - ✅ Blank template: press/release edges (`down` / `up` events) and an event cap.
-- ⬜ **A shared collision module** (`collide.js`, UMD, node-testable): AABB vs a tile grid and rects, walls and ceilings, corner
-  correction, moving platforms that carry the rider, a top-down corner nudge. `genres.md` promises this for tile games; today
-  each game writes its own.
-- ⬜ Interpolate the attract demo too. `SIM.at(t)` rounds to whole steps, so the demo still judders slightly at 144 Hz.
-- ⬜ Cross-browser determinism: replace the `sin` hash with an integer hash so the attract demo is bit-identical in
-  Safari/Firefox.
+- ✅ **A shared collision module** (`collide.js`, node-testable, `node live/collide.js` self-tests): boxes vs a tile grid and
+  rects, walls and ceilings, one-way platforms and drop-through, ceiling corner correction, a top-down corner nudge, moving
+  platforms that carry the rider, substeps so fast movers never tunnel.
+- ✅ The attract demo is interpolated too (the shell blends `SIM.LERP` keys between the two steps around t; renders as well).
+- ✅ Sim hashes are integer hashes (`Math.imul`), so a sin() difference between engines can't change the demo. Hero physics
+  uses only IEEE-exact ops; wind still uses `sin`, which only moves foliage.
 
 ## Engine: input, shell and lifecycle
 - ✅ `input.js`: one record from keyboard, pointer, touch (floating stick and buttons from `SIM.CONTROLS`) and gamepad.
@@ -50,9 +50,11 @@ pixel-identical against the old engine).
   - no zoom or pull-to-refresh;
   - a "turn your phone" overlay;
   - fullscreen and orientation lock on the first touch (packed build).
-- ⬜ Persistent progress: best score, unlocked levels (`SIM.SAVE` keys → localStorage).
-- ⬜ A remappable controls screen and on-screen button glyphs that follow the last used device (`INPUT.device`).
-- ⬜ Fit the touch layout to the HUD: register the touch buttons as `L.uiBox` so `qa.mjs` fails overlaps with HUD panels.
+- ✅ Persistent progress: `SIM.SAVE(play, prev)` → localStorage per game, handed to `spawn` / `respawn` / `RESULT`; saved on
+  win / game over / `save` events, restart, title and a hidden tab.
+- ✅ Controls screen in the menu (remap any key, saved, reset to defaults) and `INPUT.glyph(action)` for prompts that follow
+  the device used last (key name, pad A/X/B, the touch button's label).
+- ✅ `qa.mjs` fails HUD text under the phone's touch controls (`INPUT.zones`: buttons, menu, resting stick on an 844×390 page).
 
 ## Engine: render, quality and performance
 - ✅ Quality tiers high/mid/low (`settings.js`, `Q`):
@@ -69,17 +71,18 @@ pixel-identical against the old engine).
   - the bloom chain is skipped when unused;
   - primitives (glow/shadow/puff/star/ring) are culled offscreen;
   - the cracks decal no longer forms a feedback loop.
-- ⬜ `L.text`: one batch on the glyph texture instead of one draw per glyph. `L.label`: reuse one canvas per slot.
-- ⬜ Top-down scene: Y-sort into a reused index array (no closure per object per frame).
-- ⬜ Drop shadows of atlased sprites sample at mip 4.5, wider than the 8 px atlas pad: widen the pad or clamp the lod for atlased names.
-- ⬜ KTX2 / Basis texture delivery for big games (`performance.md` §9).
+- ✅ `L.text` is one instanced draw per string; `L.label` reuses one canvas per slot.
+- ✅ Top-down scene: Y-sort over reused records (no closure or array per object per frame).
+- ✅ Drop shadows of atlased sprites clamp the mip to 3 (the 8 px atlas pad), so neighbours never bleed in.
+- ⬜ KTX2 / Basis texture delivery, only for a game whose textures exceed the phone budget (`performance.md` §9): needs the
+  `basisu` encoder and a transcoder in the page; not worth it below ~150 MB of textures.
 
 ## Sound
 - ✅ `snd.js`: procedural SFX presets, game voices (`SOUND.defs`), sample files, streamed or procedural music, voice cap and
   rate limit, a compressor. Zero cost when off or hidden.
 - ✅ `audio.js` per game, mapped from sim events; `references/audio.md`.
-- ⬜ A tiny procedural "jingle" helper for win / game over / level up (a note list → voices).
-- ⬜ Duck the music under big events (explosion, boss roar).
+- ✅ `SND.jingle(notes, opts)` and built-in `win` / `lose` jingles for the `win` / `gameover` events.
+- ✅ Music ducks under big moments (`SND.DUCK`, or `{ duck }` in a map entry).
 
 ## Skill workflow
 - ✅ Step 0 asks about generator, platform, fidelity and game/scope, then (only if still open) goal, failure, sound and touch
@@ -95,8 +98,8 @@ pixel-identical against the old engine).
   - the game critic plays the phone profile and scores controls and sound;
   - the critic-blocking wording is fixed;
   - the fidelity bar follows the brief.
-- ⬜ A `flow` QA scenario that goes win → result card → Play again → heap and pool counts back to baseline, plus settings
-  surviving a reload.
-- ⬜ Port all of this to the Codex edition (`codex/`), which has diverged since the fork.
-- ⬜ Migrate `2d_new_game` (its own customised engine) to the shell, or measure it with the benchmark first.
+- ✅ `livecheck.mjs --flow`: result card → Play again restarts the run, a changed option survives the reload.
+- ✅ The Codex edition has all of it: templates, engine, tools and references copied; SKILL.md, setup.sh, engine.md,
+  pitfalls.md and critics.md got the same changes in Codex's own wording (no generator question; Codex asks in chat).
+- ⬜ Migrate `~/2d_new_game` (its own customised engine) to the shell: the user's project, done only when they ask.
 - ⬜ Real-device pass (Android mid-range, iPhone) with `?perf=1`; record the numbers in `performance.md` as reference points.

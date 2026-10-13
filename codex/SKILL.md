@@ -45,14 +45,14 @@ This folder is self-contained: scripts, engine templates, references and Playwri
    - **Every rig reports its joints and passes the measured checks of `qa.mjs` before anyone looks at it:** foot slide, ground, limp, stride, knee, stretch, arm phase, aim at the impact, pops, rigid-only motion, coverage (`animation.md` §14). Frame-by-frame cycle sheets and the motion critic then judge the rest.
 6. **Independent critics.**
    - They run in the background on assets, modules, motion, frames and feel.
-   - At most 3 rounds each.
-   - They gate approval, never what is shown in the live page (`references/critics.md`).
+   - At most 3 rounds each (the fidelity critic's extra rounds only when the user asks, principle 8).
+   - Their verdicts decide what the next iteration fixes; they never hold back the live page, the next step or a progress update (`references/critics.md`).
 7. **The user is never the first to find a defect a check could find.**
    - `qa.mjs` (automatic) runs after every change to the HUD, a rig, an emitter or the render pipeline, and before anything is shown as done: HUD text inside its panel at worst-case strings, emitted effects drawn where the sim emits them, walk cycles that really move the limbs, time-driven effects that really move and don't sweep when a state changes.
    - Critics are launched by default at the gates, without being asked, **in the background**: they never block the live page, the next step or a progress update; their results are folded in before the turn's final message (the turn model above). Speed is the point of this skill; the automatic check is the blocking one because it takes seconds.
    - Every defect the user reports becomes a check: a QA state, an anchor or a cycle that would have caught it (Phase 4).
    - The bar is "a clip of a shipped indie game", not "works": `critics.md` §0 is the polish checklist.
-8. **Fidelity to the reference is the default bar.** Unless the user asks for "inspired by", the game must look nearly identical to the reference, not merely "in its style":
+8. **Fidelity to the reference is the default bar.** Unless the brief says "inspired by" or "style only" (Step 0), the game must look nearly identical to the reference, not merely "in its style" (for "inspired by" the fidelity critic judges style, palette and rendering family, not layout):
    - the same camera angle and scale, the same layout (the reference's composition is the level's first screen), the same palette, value planes and light pools, the same character and prop designs, density of actors, effects and HUD layout;
    - it is measured, not eyeballed: a `match` state in `SCENE.QA()` restages the reference's composition, and the **fidelity critic** (`critics.md` §5a) compares it with `compare.py` at the same scale, region by region;
    - the fidelity critic runs at both gates and after every visual change batch, in the background; fold its top fixes into the next pass;
@@ -61,14 +61,35 @@ This folder is self-contained: scripts, engine templates, references and Playwri
    - Render is a function of time and sim state.
    - The level is data.
    - The attract demo is a scripted replay, checked headless.
+10. **Performance first, for phones.** The game must hold 60 fps on a mid-range phone, so performance is architecture decided in Phase 1, not a fix at the end (`references/performance.md`).
+   - Before coding the systems, write `study/PERF.md`: the max simultaneous count of every system, and per system its pool, collision broad phase, update tier, batch/atlas group and cull rule, each with its reason.
+   - Fit the mechanic: a 40-object puzzle needs no pools or grids; a shmup needs all of them. The simplest structure that holds the budget wins.
+   - Use what the engine does (state caching, auto-culling, render scale, `G.batch`, atlases, counters); never duplicate it.
+   - Hot paths allocate nothing: pools of plain objects in `S`, grids and scratch typed arrays at module scope.
+   - Measure, don't guess: `livecheck.mjs` prints `perf` (frame p50/p95, draws, texture MB); compare it with PERF.md at each gate.
+   - Quality tiers (high / mid / low, `performance.md` §13) are automatic; the scene's own extras honour `Q` (`L.fx(n)`, `Q.shadows`, `Q.post`), and no gameplay cue may exist only at the high tier.
+11. **A complete game on every device, from the engine.** The shell (`engine.md` §11) already gives every game smooth fixed-step motion at any refresh rate, keyboard + touch (stick and buttons) + gamepad input, a pause / options menu (quality, shadows, music, sound, shake), win / game-over cards, sound from sim events with music that costs nothing when off (`references/audio.md`), and recovery from phone lifecycle events. Configure it (`SIM.CONTROLS`, `SIM.LERP`, `SIM.HINT`, `win` / `gameover` events, `live/audio.js`); never rebuild input, the loop or the menu in game code.
 
 The references are background knowledge, not rules: the reference and the user decide.
 
-## Step 0: look, then ask once
+## Step 0: look, then ask (one or two rounds)
 
-Look at the reference first (`view_image` for a still). For a video, run `study.py probe` and make one contact sheet. Then ask once (principle 1), grouping everything:
-- **What game this becomes and who the player is,** when the picture doesn't make it obvious. Each option says what the player does in this picture.
-- **Anything else you can't settle yourself.**
+Look at the reference and read the user's description first (`view_image` for a still). For a video, run `study.py probe` and make one contact sheet. Then ask (principle 1), recommended option first, options written from **this** picture (what the player does in it, what it would sound like):
+
+**Round 1 (always):**
+1. **Platform:** Universal: desktop + phone + gamepad (recommended) / Desktop-first / Phone-first (touch, short sessions).
+2. **Fidelity:** Near-identical to the picture / Inspired by it (same style, new layout and designs) / Style only (a new world in this look).
+3. **The game and the player's role**, when the picture and the description don't settle it (each option: what the player does here). When they do settle it, ask the **scope** instead: one screen / one short level / a level with a boss or finale.
+
+**Round 2 (only for what is still open; skip it when the description answers everything):**
+4. **Goal and session:** a level with an end and a win card / score attack, 1–3 min / endless or sandbox / a few puzzle levels.
+5. **Failure:** soft (respawn, keep progress) / lives, then game over / instant retry.
+6. **Sound:** procedural music + sound effects, both switchable (recommended) / sound effects only / my own music file (they drop it in `live/audio/`) / silent.
+7. **Touch scheme** (phone or universal, only when the genre leaves it open): stick + buttons / tap to move / swipes / one button.
+
+Decide without asking, and say so in the progress message: quality tiers and their defaults, orientation (from the reference's aspect), controls per device (from the verbs), what is saved.
+
+Write the answers to `study/BRIEF.md` (a few lines: game, player, platform and controls, fidelity, goal / fail loop, sound, scope). Every phase, gate and critic reads it; when the user changes their mind, update it first.
 
 **Never ask about the image generator:** built-in imagegen is fixed (`generators.md` (a)). All art goes through it, with arguments from `gen.py prepare` and back through `gen.py import`. Don't route generation through other image skills or tools.
 
@@ -97,13 +118,17 @@ Send the live URL right away.
    - start generating the pieces the first frame needs most (e.g. the backdrop, the main depth bands, terrain, the hero anchor): `gen.py prepare` → imagegen → `gen.py import`, one call per asset, overlapping calls only when the tool supports it. The first one is the capability probe (`generators.md` (c)).
 2. **While it runs, finish the study** (including `study/MATCH.md`: the reference decomposed into a stageable layout, `study.md` §4.7):
    - `study/STYLE.md`;
-   - `study/PLAN.md`: layers, assets in generation order, effects, interactions, level data, attract beats.
+   - `study/PLAN.md`: layers, assets in generation order, effects, interactions, level data, attract beats; the **game flow** (attract → play → pause → win / game over → results → restart / title) and the **control map** per device (keys, `SIM.CONTROLS` touch layout, pad); the **sound list** (event → sound, the song's mood);
 3. **Shape the base into this game on placeholders:**
    - the mover or interaction model;
-   - collision;
+   - pools, collision broad phase and update tiers as PERF.md decided them (`performance.md` §2, §3, §7), built in from the start;
+   - collision (extend the template's `selfCheck` probes to every new surface type and mechanic; tile or box levels move through `collide.js`, never a hand-written resolver);
    - sort order;
-   - camera;
+   - camera (`SIM.CAM`: follow, limits, from the level data);
    - level;
+   - controls: `SIM.CONTROLS` (one touch button per action), `SIM.HINT`, `SIM.LERP` (every moving key);
+   - the flow: `win` / `gameover` events where the brief has an end; `SIM.SAVE` for what persists (best score, unlocked level);
+   - sound: `live/audio.js` map for every event kind, timbre and song from the art and BRIEF (`references/audio.md`);
    - attract script.
 
    `references/genres.md` has notes per family. Keep the engine and the sim/scene contracts (`references/engine.md`).
@@ -124,7 +149,7 @@ Send the live URL right away.
    - A change of texture resolution or display size lands **in the same step** as the scene code that sizes it (`SIZES`): the user is watching the live page, and oversized sprites, even briefly, read as broken.
 3. **While images generate,** build the effects this reference and style need (`references/effects.md`, `references/styles.md`).
 4. **Hero.** Approve the hero anchor in a real rig pose (feet under the hips, free limbs), then make its part sheet and variants (`variantfix.py`). Do the same for every actor in the animation list (`animation.md` §13), NPCs and animals included.
-5. **Gate A.** `qa.mjs` passes (seconds). Launch the asset + frame + fidelity critics in the background (the fidelity critic on `frames/qa/match.png`) and send the live page and a few stills right away in a progress update; keep working, and fold the critics' top fixes into the next iteration when they land.
+5. **Gate A.** `qa.mjs` passes (seconds); `livecheck.mjs` `perf` is within the PERF.md budgets (record it in PERF.md §5); for phone or universal briefs `livecheck.mjs --mobile` runs with 0 errors and the touch controls do the main verb. Launch the asset + frame + fidelity critics in the background (the fidelity critic on `frames/qa/match.png`) and send the live page and a few stills right away in a progress update; keep working, and fold the critics' top fixes into the next iteration when they land.
 
 ## Phase 3: make it alive
 
@@ -133,7 +158,9 @@ Send the live URL right away.
 3. **Attract demo.** Tune it headless: `node live/tune.cjs`.
 4. **Module critic** per finished module.
 5. **Gate B.**
-   - `qa.mjs` passes; launch the frame, fidelity, motion and game critics in the background and run the interaction audit meanwhile. Show the live build in a progress update at once; collect the critic results and fold them in before the turn's final message (Codex cannot message after its turn ends; never promise a later message).
+   - `qa.mjs` passes; `livecheck.mjs` `perf` holds the PERF.md budgets in normal play **and** in a stress case at the design's max counts (record both in PERF.md §5; over budget → `performance.md` §10, ask before changing the look).
+   - `livecheck.mjs --flow` passes (menu pause and resume, result card → Play again, context loss recovers with options kept); for phone or universal briefs `--mobile --flow --cpu 4` too, and `--q low` keeps every cue readable; `audio.played` > 0 after a play script (every verb heard).
+   - Launch the frame, fidelity, motion and game critics in the background and run the interaction audit meanwhile. Show the live build in a progress update at once; collect the critic results and fold them in before the turn's final message (Codex cannot message after its turn ends; never promise a later message).
    - Send the hand-back (`references/delivery.md`): the URL, what to try, what changed, known gaps.
 
 ## Phase 4: feedback loop
@@ -150,7 +177,7 @@ For each note:
 
 ## Phase 5: deliver
 
-`pack.py --name <name> --zip` builds the static playable build, textures, manifest, sources and README. Make a video only when asked.
+`pack.py --name <name> --zip` builds the static playable build, textures, manifest, sources and README. Verify the build with `livecheck.mjs --url … --flow` (and `--mobile --flow`), `delivery.md`. Make a video only when asked.
 
 ## Speed
 
@@ -165,6 +192,8 @@ For each note:
   - After a sim change, run `tune.cjs`.
   - After a scene or lib change, run `livecheck.mjs`.
 - **Pitfalls:** skim `references/pitfalls.md` once per project.
+- **Performance:** read `references/performance.md` once per project, before writing PERF.md.
+- **Sound:** read `references/audio.md` once per project, before writing `live/audio.js`.
 
 ## References
 
@@ -182,12 +211,14 @@ For each note:
 | `critics.md` | Critic types (incl. the fidelity critic), briefs, rounds |
 | `pitfalls.md` | Bugs that cost hours before |
 | `delivery.md` | Hand-back messages and packing |
+| `performance.md` | Phone-first performance: batching/atlases, pools, spatial grid, overdraw, culling/chunking, update tiers, GC, texture memory, profiling and budgets, the PERF.md plan, quality tiers and the adaptive governor |
+| `audio.md` | Sound and music: events → sounds, timbre from the art, the set per genre, streamed vs procedural music, cost, mixing, checks |
 
 ## Scripts (run from the project root; `<skill>` = this folder)
 
 | Script | Does |
 |---|---|
-| `setup.sh <dir> --ref <file> [--genre side\|top\|blank]` | Dependencies, project skeleton, base template, placeholder art |
+| `setup.sh <dir> --ref <file> [--genre side\|top\|blank] [--refresh-engine]` | Dependencies, project skeleton, base template (engine shell: input, settings/quality, menu, sound, collision), placeholder art; `--refresh-engine` updates an existing project's engine files |
 | `serve.sh` | Live preview server |
 | `gen.py check / prepare / import / validate / key / pixel` | Prepare built-in imagegen arguments (style bible and role-labelled refs on every call), import the returned image (raw copy, alpha validation, logs); offline alpha and pixel tools. It never generates |
 | `slice.py`, `prep.py`, `variantfix.py` | Cut sheets; turn art/gen into live/assets; make variants differ only where they changed |
@@ -197,7 +228,8 @@ For each note:
 | `jointr.py` | Limb half-widths at elbows and knees → round joint caps (`animation.md` §15.5) |
 | `softbones.py` | Weight maps for bending one painted sprite (an animal's neck, head, tail) in the shader (`animation.md` §15.6) |
 | `render.mjs stills / video` | Deterministic renders of the live page |
-| `livecheck.mjs` | Headless play-test: keys, pointer (click, hold, release, wheel), screenshots, errors, fps, hot reload |
+| `livecheck.mjs` | Headless play-test: keys, pointer (click, hold, release, wheel), touch (`--mobile`: stick, buttons, multi-touch), screenshots, errors, fps, `perf` (frame/CPU p50/p95, draw calls, texture MB, tier), audio, hot reload; `--flow` (menu, result card, context-loss recovery), `--q`, `--cpu`, `--scale` |
+| `atlas.py <atlas> names… [--glob]` | Pack textures drawn in one layer into one atlas (`live/atlas.js`); they then share one texture and one `G.batch` |
 | `qa.mjs` | Automatic polish checks from `SCENE.QA()`: HUD text overflow/overlap, emitter anchors, limb motion of walk cycles (+ cycle sheets), rig checks, frozen effects and sweeps (`anim`), and the measured rig checks from the joint trace (foot slide, ground, lift, limp, stride, knee, stretch, arm phase, rigid-only motion, aim at the impact, pops, coverage) |
 | `pack.py` | Static playable build and asset pack |
 | `study.py`, `compare.py` | Reference analysis; reference vs render |

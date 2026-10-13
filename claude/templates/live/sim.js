@@ -46,7 +46,8 @@
 
   // ---------------- one wind field for the whole world ----------------
   // base breeze + gust fronts crossing left → right (~every 14 s, jittered). Foliage, props, particles and water all sample it.
-  const h1 = (n) => { const v = Math.sin(n * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); };
+  // integer hash → [0, 1): bit-identical in every JS engine (a sin() hash is not: engines differ in sin's last bits and ×43758 amplifies them)
+  const h1 = (n) => { let x = Math.imul(Math.round(n * 1024) | 0, 0x9e3779b1); x ^= x >>> 15; x = Math.imul(x, 0x85ebca77); x ^= x >>> 13; x = Math.imul(x, 0xc2b2ae3d); x ^= x >>> 16; return (x >>> 0) / 4294967296; };
   const GUST = 14, GUST_V = 360;
   const gusts = (t) => { const k = Math.floor(t / GUST), out = [];
     for (const kk of [k - 1, k]) { const t0 = kk * GUST + 2 + 6 * h1(kk); if (t < t0) continue;

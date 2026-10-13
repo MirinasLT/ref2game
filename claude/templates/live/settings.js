@@ -74,8 +74,16 @@
   let root = null, card = null;
   const LBL = { auto: 'Auto', high: 'High', mid: 'Medium', low: 'Low', true: 'On', false: 'Off' };
   const cyc = (k, opts) => { SET[k] = opts[(opts.indexOf(SET[k]) + 1) % opts.length]; S.apply(); };
+  let wait = null;                                                     // Controls screen: the action waiting for a key
+  let eat = false;                                                     // swallow that key's keyup: Space would re-click the button
+  addEventListener('keyup', (e) => { if (eat) { eat = false; e.preventDefault(); e.stopPropagation(); } }, true);
   const items = (mode) => {
-    const L = [];
+    const L = [], I = window.INPUT;
+    if (mode === 'keys') {
+      for (const a of I.binds()) L.push([I.LABEL[a] || a, wait === a ? 'press a key…' : I.keyName(I.KEYS[a][0]), () => { wait = a; }]);
+      L.push(['Reset to defaults', null, () => { wait = null; I.resetKeys(); S.apply(); }]);
+      L.push(['Back', null, () => { wait = null; S.show('pause'); }]);
+      return L; }
     if (mode === 'pause') L.push(['Resume', null, () => S.close()]);
     L.push([mode === 'pause' ? 'Restart' : 'Play again', null, () => { S.close(); S.on.restart && S.on.restart(); }]);
     if (mode === 'pause') {
@@ -85,6 +93,7 @@
       L.push(['Sound effects', LBL[SET.sfx], () => cyc('sfx', [true, false])]);
       L.push(['Screen shake', LBL[SET.shake], () => cyc('shake', [true, false])]);
       if (window.INPUT && INPUT.hasTouch) L.push(['Touch controls', LBL[SET.touch], () => cyc('touch', ['auto', true, false])]);
+      if (I && I.binds && I.binds().length && I.device !== 'touch') L.push(['Controls', null, () => S.show('keys')]);
       if (document.fullscreenEnabled) L.push(['Fullscreen', LBL[!!document.fullscreenElement], () => S.fullscreen(!document.fullscreenElement)]);
     }
     L.push(['Title', null, () => { S.close(); S.on.title && S.on.title(); }]);
@@ -98,14 +107,14 @@
       root.addEventListener('pointerdown', (e) => e.stopPropagation()); }
     const fi = card.contains(document.activeElement) ? [...card.querySelectorAll('button')].indexOf(document.activeElement) : 0;
     card.replaceChildren();
-    const h = document.createElement('h2'); h.textContent = info ? info.title : 'Paused'; card.appendChild(h);
+    const h = document.createElement('h2'); h.textContent = info ? info.title : mode === 'keys' ? 'Controls' : 'Paused'; card.appendChild(h);
     for (const l of (info && info.lines) || []) { const p = document.createElement('p'); p.textContent = l; card.appendChild(p); }
     for (const [label, val, fn] of items(mode)) { const b = document.createElement('button'); b.type = 'button';
       b.append(label); if (val !== null) { const v = document.createElement('b'); v.textContent = val; b.appendChild(v); }
       b.addEventListener('click', () => { if (window.SND) SND.play('click'); fn(); if (S.open) build(); }); card.appendChild(b); }
     const bs = card.querySelectorAll('button'); (bs[Math.max(0, Math.min(bs.length - 1, fi))] || bs[0]).focus({ preventScroll: true });
   };
-  S.show = (m, inf = null) => { mode = S.mode = m; info = inf; S.open = true; build(); root.classList.add('on');
+  S.show = (m, inf = null) => { mode = S.mode = m; info = inf; S.open = true; wait = null; build(); root.classList.add('on');
     card.querySelector('button').focus({ preventScroll: true });           // after display: a hidden element can't take focus
     S.on.pause && S.on.pause(true); };
   S.openMenu = () => { if (!(S.open && mode === 'result')) S.show('pause'); };   // never replaces a result card
@@ -121,7 +130,9 @@
       if (screen.orientation && screen.orientation.lock) screen.orientation.lock(VW >= VH ? 'landscape' : 'portrait').catch(() => {}); }).catch(() => {});
     else if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); } catch (e) { /* unsupported */ } };
   addEventListener('keydown', (e) => { if (!S.open) return; e.stopPropagation();            // the game sees no keys while the menu is up
+    if (wait && !e.repeat) { e.preventDefault(); const a = wait; wait = null;                 // Controls: this key becomes the action's
+      if (e.code !== 'Escape' && INPUT.bind(a, e.code)) { S.apply(); if (window.SND) SND.play('click'); } eat = true; build(); return; }
     if (e.code === 'ArrowDown' || e.code === 'KeyS') { S.nav(1); e.preventDefault(); }
     else if (e.code === 'ArrowUp' || e.code === 'KeyW') { S.nav(-1); e.preventDefault(); }
-    else if ((e.code === 'Escape' || e.code === 'Backspace') && mode === 'pause' && !e.repeat) { S.close(); e.preventDefault(); } }, true);
+    else if ((e.code === 'Escape' || e.code === 'Backspace') && !e.repeat) { e.preventDefault(); if (mode === 'pause') S.close(); else if (mode === 'keys') S.show('pause'); } }, true);
 })();

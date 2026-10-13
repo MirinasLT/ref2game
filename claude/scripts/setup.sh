@@ -5,7 +5,7 @@
 # 2. creates the project: art/{gen,raw,logs,prompts,providers,requests}  live/  study/{crops,critique}  frames/  ref2game.json;
 #    --ref copies the user's reference to <project>/ref.png (the generator's style_ref): images converted to PNG, a video
 #    gives its middle frame (ffmpeg). Given explicitly, it replaces an existing ref.png;
-# 3. copies the live template — missing files only: the engine (index.html shell, gl.js, lib.js, settings.js, input.js, snd.js),
+# 3. copies the live template — missing files only: the engine (index.html shell, gl.js, lib.js, settings.js, input.js, snd.js, collide.js),
 #    the game files (sim.js, scene.js, audio.js) and tune.cjs. --refresh-engine copies the engine files again (the old ones are
 #    kept as *.prev): settings/quality tiers, input (touch, gamepad), sound and the shell are engine, never edited per game. --genre picks the starting sim.js/scene.js: side (side view),
 #    top (top-down / 3/4), blank (an empty stage with pointer input). It is only a starting point for the game;
@@ -58,7 +58,7 @@ if [ -n "$REF" ]; then                                     # the user's referenc
   [ -s "$PROJ/ref.png" ] || { echo "--ref: could not write $PROJ/ref.png from $REF"; exit 1; }
   echo "reference: $REF -> $PROJ/ref.png"
 fi
-for f in index.html gl.js lib.js settings.js input.js snd.js; do
+for f in index.html gl.js lib.js settings.js input.js snd.js collide.js; do
   if [ "$REFRESH" = 1 ] && [ -e "$PROJ/live/$f" ] && ! cmp -s "$SKILL/templates/live/$f" "$PROJ/live/$f"; then cp "$PROJ/live/$f" "$PROJ/live/$f.prev"; cp "$SKILL/templates/live/$f" "$PROJ/live/$f"; echo "refreshed live/$f (old: $f.prev)"
   else cp_new "$SKILL/templates/live/$f" "$PROJ/live/$f"; fi; done
 [ -f "$PROJ/ref2game.json" ] || cat > "$PROJ/ref2game.json" <<'JSON'

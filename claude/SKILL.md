@@ -120,12 +120,12 @@ Send the live URL right away.
 3. **Shape the base into this game on placeholders:**
    - the mover or interaction model;
    - pools, collision broad phase and update tiers as PERF.md decided them (`performance.md` §2, §3, §7), built in from the start;
-   - collision (extend the template's `selfCheck` probes to every new surface type and mechanic);
+   - collision (extend the template's `selfCheck` probes to every new surface type and mechanic; tile or box levels move through `collide.js`, never a hand-written resolver);
    - sort order;
    - camera (`SIM.CAM`: follow, limits, from the level data);
    - level;
    - controls: `SIM.CONTROLS` (one touch button per action), `SIM.HINT`, `SIM.LERP` (every moving key);
-   - the flow: `win` / `gameover` events where the brief has an end;
+   - the flow: `win` / `gameover` events where the brief has an end; `SIM.SAVE` for what persists (best score, unlocked level);
    - sound: `live/audio.js` map for every event kind, timbre and song from the art and BRIEF (`references/audio.md`);
    - attract script.
 
@@ -155,7 +155,7 @@ Send the live URL right away.
 4. **Module critic** per finished module.
 5. **Gate B.**
    - `qa.mjs` passes; `livecheck.mjs` `perf` holds the PERF.md budgets in normal play **and** in a stress case at the design's max counts (record both in PERF.md §5; over budget → `performance.md` §10, ask before changing the look).
-   - `livecheck.mjs --flow` passes (menu pauses and resumes, context loss recovers); for phone or universal briefs `--mobile --flow --cpu 4` too, and `--q low` keeps every cue readable; `audio.played` > 0 after a play script (every verb heard).
+   - `livecheck.mjs --flow` passes (menu pause and resume, result card → Play again, context loss recovers with options kept); for phone or universal briefs `--mobile --flow --cpu 4` too, and `--q low` keeps every cue readable; `audio.played` > 0 after a play script (every verb heard).
    - Launch the frame, fidelity, motion and game critics in the background and run the interaction audit meanwhile. Hand back without waiting; the scores follow in the next message.
    - Send the hand-back (`references/delivery.md`): the URL, what to try, what changed, known gaps.
 

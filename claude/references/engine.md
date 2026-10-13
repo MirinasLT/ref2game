@@ -25,7 +25,8 @@ A tiny WebGL2 renderer, a deterministic sim and a scene file that is a pure func
 | `live/gl.js` | WebGL2 context, caps (`G.CAPS`: hdr targets, max texture size), premultiplied textures (mipmapped, or nearest; downscaled past the GPU limit), programs (COMMON: hash, vnoise, fbm with `FBM_OCT` octaves, scr), checked render targets (half-float or RGBA8 fallback), resize/free, cached GL state (program, VAO, blend, unchanged uniforms and bound textures skipped), affine quads, instanced batches | No (`setup.sh --refresh-engine` updates it) |
 | `live/settings.js` | `SET` (player options, localStorage), `Q` (quality tier knobs), the pause / settings / result menu, render-scale fit on resize, the adaptive quality governor | No (engine) |
 | `live/input.js` | One input record from keyboard (latched taps, no stuck keys), pointer, touch (floating stick + buttons from `SIM.CONTROLS`) and gamepad | No (engine) |
-| `live/snd.js` | Sound engine: procedural SFX voices, sample SFX, streamed or procedural music; zero cost while off | No (engine) |
+| `live/snd.js` | Sound engine: procedural SFX voices, jingles, sample SFX, streamed or procedural music with ducking; zero cost while off | No (engine) |
+| `live/collide.js` | `COLLIDE`: box movers vs tile grids and rects (walls, ceilings, one-way, corner correction, top-down corner nudge, moving platforms that carry); `node live/collide.js` self-tests | No (engine) |
 | `live/audio.js` | `window.SOUND`: this game's event → sound map, voices, files, song (`audio.md`) | Yes, the game's sound |
 | `live/lib.js` | Shader library, `sprite()`, passes (shadow, ink), primitives (glow, shadow, puff, star, ring, fog), rig helper, glyph text, the frame pipeline | Add shaders through `L.init(w, h, extra)`; edit lib only for engine-wide fixes |
 | `live/sim.js` | Everything that **happens**: movement, collisions, level data, pickups, hazards, critters, reactive props, springs, wind, camera, events | Yes, it is the game |
@@ -164,15 +165,16 @@ Deformations are clamped in the shader; `pow()` of a negative base is NaN, so al
 | `CONTROLS` | `{ move: 'x' \| 'xy' \| null, buttons: [[action, label], …], pointer }`: what input.js shows on touch screens (a floating stick for `x`/`xy`, up to 4 buttons, taps passed to the world when `pointer`) |
 | `LERP` | State keys the shell interpolates between the last two steps (numbers or arrays of numbers: positions, camera, `t`). Default `['x', 'y', 'cam', 't']`. Add every moving thing whose position is a top-level key; pooled entities interpolate in the scene with `SCENE.state` vs their stored previous position when they need it |
 | `VERSION` | Optional: bump it when the state's meaning changes without its shape changing, so a hot reload starts a fresh run instead of restoring an incompatible state |
-| `RESULT(e, S)` | Optional: `{ title, lines }` for the card shown on a `win` / `gameover` event (default: "Level complete" / "Game over" + `e.score`) |
+| `RESULT(e, S, P)` | Optional: `{ title, lines }` for the card shown on a `win` / `gameover` event (default: "Level complete" / "Game over" + `e.score`); `P` = saved progress ("Best 12") |
+| `SAVE(S, P)` | Optional: persistent progress → the object to keep (`{ best: Math.max(P.best \|\| 0, S.score), level }`), called on `win` / `gameover` / `save` events, restart, title and a hidden tab; stored in localStorage per game. Plain JSON, small |
 | `FULLSCREEN` | `false` to skip the automatic fullscreen + orientation lock on the first touch in the packed build |
 | `demoCheck(S)` | Optional: does the attract run hit its beats? `tune.cjs` passes on it; without it, every `S.got` ≥ 0 (no `S.got`: pass) |
 | `selfCheck()` | Optional: `[failure strings]` for what the level data must satisfy after every placement pass (every spawn in open space, every enemy able to reach and attack the player, every pickup reachable). `tune.cjs` fails on any |
 | `create()` | Fresh state (plain JSON-able object: sessionStorage keeps it across reloads) |
 | `step(S, input)` | Advances S by DT with the input below |
-| `at(t)` | Attract replay of `SCRIPT` from 0 to t, cached incrementally; returns `{...S, loop, q}`; same t gives the same state |
-| `spawn(worldT)` | Play-mode start state (`vj: true` for variable jumps, `wt0` world clock) |
-| `respawn(S, worldT)` | Keeps progress (banked pickups) |
+| `at(t)` | Attract replay of `SCRIPT` from 0 to t, cached incrementally; returns `{...S, loop, q}`; same t gives the same state. The shell wraps it to blend `LERP` keys between the two steps around t (smooth demo and renders at any rate) |
+| `spawn(worldT, P)` | Play-mode start state (`vj: true` for variable jumps, `wt0` world clock); `P` = saved progress (start at the unlocked level) |
+| `respawn(S, worldT, P)` | Keeps progress (banked pickups) |
 | `outOfPlay(S)` | Respawn condition |
 | `scriptInput(t, S)` | The demo's input at time t (same shape as play input) |
 | Level data and helpers | e.g. `SURF`, `COINS`, `TUFTS`, `yOn`, `groundBelow`, `windAt`, `gustAt`, `gusts`: the scene reads them, it never duplicates them |
@@ -181,6 +183,9 @@ Input (input.js, one record whatever the device):
 - Actions: `left` (←/A, stick, d-pad), `right`, `up`, `down`, `jump` (Space, pad A, touch button), `act` (X/J/Enter, pad X), `alt` (C/K, pad B/Y); `ax`, `ay` analog −1..1 (stick or pad; keys give ±1). A tap shorter than a frame is latched until the next step, so it always reaches the sim.
 - Pointer, in view px: `px`, `py`; `press` = button held; `click` = true for exactly one sim step; `slot` 1–10 (digit keys), `wheel` ±1 (wheel, pad shoulders). Any input starts play.
 - Read edges in the sim (`jumpHeld && !S.prevJump`), never in the shell. Top-down movers use `inp.ax/ay` for analog speed.
+- Prompts: `INPUT.glyph('jump')` gives what to print for the device used last ("Space", pad "A", the touch button's label); players remap keys in the menu (Controls), so never hard-code a key name in the HUD.
+
+Collision (`collide.js`, for tile and box games; the side template's polyline walk lines stay as they are): build `W = COLLIDE.world({ tile, cols, rows, data, rects })` once at load (module scope, not in S), then per step `COLLIDE.carry(b, W)` and `COLLIDE.move(b, vx * DT, vy * DT, W, { corner: 6 })` (platformer) or `{ nudge: 10 }` (top-down); read `b.ground`, `b.on`, `b.hitX`, `b.hitY` to zero velocities. Moving platforms are rects whose `dx, dy` the sim sets each step. In node (`tune.cjs`) require it: `const COLLIDE = root.COLLIDE || require('./collide.js')`.
 
 Principles:
 - **Every reaction lives in the sim:** springs, pendulums, critter FSMs, foliage, camera. The demo and play then behave the same, and `tune.cjs` can check the demo headless.
@@ -248,7 +253,7 @@ Naming rules (prep.py, gen.py):
 
 ## 8. Determinism rules
 
-- Every frame is a pure function of `t` and the sim state. No `Math.random`, no `Date`, no accumulated state in the scene. Use `L.rnd(i, k)` for per-instance jitter. Breaking this causes flicker between renders, and the offline video stops matching the live page.
+- Every frame is a pure function of `t` and the sim state. No `Math.random`, no `Date`, no accumulated state in the scene. Sim hashes are integer hashes (`Math.imul`), not `fract(sin(x) · 43758)`: engines differ in sin's last bits and the multiplier turns that into different values, so a sin hash breaks the demo between Chrome, Safari and Firefox. Use `L.rnd(i, k)` for per-instance jitter. Breaking this causes flicker between renders, and the offline video stops matching the live page.
 - Ambient schedules use **windows with jitter**: `k = floor(t / per)`, offset `rnd(k)·jitter`, sometimes skipped. Never use exact periods, and never reuse one period for two systems. Incommensurate periods (golden-ratio or prime ratios) keep loops from visibly repeating.
 - Anything that moves on its own with a cause (sway in wind, a pendulum, a spring) belongs in the sim or in pure functions of `t` (wind field). Never integrate in the scene.
 
@@ -282,7 +287,8 @@ Every game gets these from the engine files, with no game code. Don't re-impleme
 - **Motion.** The sim steps at a fixed 120 Hz; the shell draws the state between the last two steps (`SIM.LERP` keys), snaps vsync jitter to whole steps and runs at most 8 steps a frame. Movement and camera are even at 60, 90, 120 and 144 Hz; a slow device slows the game down instead of spiralling.
 - **Input** (`input.js`): keyboard, mouse, touch and gamepad into one record (§6). Phones get the controls `SIM.CONTROLS` asks for, plus a ❚❚ menu button; a hidden tab or a lost focus releases every key. When a new action is added to the sim, add its button to `CONTROLS` and its key to the hint.
 - **Options and quality** (`settings.js`): `SET` (saved per game) and `Q` (resolved knobs, read every frame by lib.js and the scene). The sim never reads them.
-- **Menu.** Esc / ❚❚ / pad Start opens Resume, Restart, Quality, Shadows, Music, Sound effects, Screen shake, Touch controls, Fullscreen, Title. The game pauses while it is open and when the tab is hidden. A sim event `{ k: 'win' }` or `{ k: 'gameover', score }` shows a result card with Play again / Title (`SIM.RESULT` words it).
+- **Menu.** Esc / ❚❚ / pad Start opens Resume, Restart, Quality, Shadows, Music, Sound effects, Screen shake, Touch controls, Controls (key remapping, saved), Fullscreen, Title. The game pauses while it is open and when the tab is hidden. A sim event `{ k: 'win' }` or `{ k: 'gameover', score }` shows a result card with Play again / Title (`SIM.RESULT` words it).
 - **Sound** (`snd.js` + the game's `audio.js`): every sound comes from a sim event; music and SFX switch off from the menu and then cost nothing (`audio.md`).
+- **Progress** (`SIM.SAVE`): best score, unlocked levels, kept in localStorage per game and handed to `spawn` / `RESULT`.
 - **Lifecycle.** A lost WebGL context (phones in the background) reloads the page with the play state kept; a sim that throws in `step` shows the error and returns to the title instead of freezing; a restored hot-reload state that no longer fits `SIM.create()` (or `SIM.VERSION`) is dropped with a note.
 - **Phone page.** Viewport and safe-area aware, no pinch / double-tap zoom / pull-to-refresh, "turn your phone" for landscape games held upright, fullscreen + orientation lock on the first touch in the packed build.

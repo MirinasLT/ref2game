@@ -7,18 +7,19 @@
   const K = { RUN: 330, ACC: 2400, DEC: 2800, DASH: 900, DASH_T: 0.16, DASH_CD: 0.5, R: 26 };
   const VIEW = { W: 1920, H: 1080 }, WORLD = { x0: 0, y0: 0, x1: 2600, y1: 1500 };
 
+  // integer hash → [0, 1): bit-identical in every JS engine (a sin() hash is not: engines differ in sin's last bits and ×43758 amplifies them)
+  const h1 = (n) => { let x = Math.imul(Math.round(n * 1024) | 0, 0x9e3779b1); x ^= x >>> 15; x = Math.imul(x, 0x85ebca77); x ^= x >>> 13; x = Math.imul(x, 0xc2b2ae3d); x ^= x >>> 16; return (x >>> 0) / 4294967296; };
   // ---------------- the level, as data (y = ground contact point; draw order = y) ----------------
   const TREES = [[420, 520, 1.0], [980, 360, 1.15], [1500, 760, 1.0], [2050, 420, 1.2], [700, 1150, 1.05], [1900, 1180, 0.95]];
   const ROCKS = [[1240, 980, 1.0], [560, 820, 0.8], [2250, 900, 1.1]];
   const SOLIDS = [...TREES.map(([x, y, s]) => ({ x, y: y - 6, r: 30 * s })), ...ROCKS.map(([x, y, s]) => ({ x, y: y - 10, r: 56 * s }))];
-  const TUFTS = []; for (let i = 0; i < 46; i++) { const h = (n) => { const v = Math.sin(n * 127.1 + i * 311.7) * 43758.5453; return v - Math.floor(v); };
+  const TUFTS = []; for (let i = 0; i < 46; i++) { const h = (n) => h1(n + i * 16);
     TUFTS.push([220 + h(1) * 2200, 240 + h(2) * 1100, Math.floor(h(3) * 3), 54 + 40 * h(4)]); }
   const COINS = [[640, 700], [705, 640], [880, 600], [1180, 560], [1320, 620], [1640, 980], [1780, 975], [1920, 1000]];
   const CRITTERS = [[1100, 820], [1700, 600], [600, 1000]];          // homes
   // attract route: [time, targetX, targetY] — the scripted input steers toward the current waypoint
   const ROUTE = [[0, 640, 700], [1.2, 880, 600], [2.2, 1180, 560], [3.0, 1320, 620], [3.8, 1150, 870], [5.0, 1640, 980], [6.2, 1920, 1000], [8.0, 1500, 1060], [9.0, 1000, 900]];
 
-  const h1 = (n) => { const v = Math.sin(n * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v); };
   const GUST = 14, GUST_V = 360;
   const gusts = (t) => { const k = Math.floor(t / GUST), out = [];
     for (const kk of [k - 1, k]) { const t0 = kk * GUST + 2 + 6 * h1(kk); if (t < t0) continue;

@@ -56,7 +56,7 @@ The minimum a slice ships with; one line in `SOUND.map` each.
 | Puzzle / cards | pick up, drop, valid move, invalid move, match/clear, win |
 | Point-and-click / UI | tap/click, hover (very quiet), open, close, success, fail |
 
-Plus `win` / `gameover` jingles when the game has those events (a 4–6 note `defs` entry is enough).
+`win` / `gameover` events play the built-in `win` / `lose` jingles; give the game its own with `SND.jingle(notes, { w, root, bpm, v })` in `SOUND.defs` (notes = `[semitones, beats]`, 4–6 of them, in the song's scale).
 
 ## 4. Music: a streamed file or a procedural song
 
@@ -84,6 +84,7 @@ Plus `win` / `gameover` jingles when the game has those events (a 4–6 note `de
 Relative levels (`v`), loudest first: hurt / death > hit / explode > jump / collect / UI > land > steps / ambience; music
 0.3–0.45 under it all. Frequent sounds are quiet and short; rare sounds can be loud and long. Steps at 0.05–0.1.
 Pitch carries information: rising = good (collect streaks, power-ups), falling = bad (hurt, fail).
+Big moments duck the music for their length (`SND.DUCK`: explode 0.45, win / lose 0.2; a map entry can pass `{ duck: 0.5 }`), so they land without being louder.
 
 ## 7. Checks
 
