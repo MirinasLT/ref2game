@@ -2,10 +2,10 @@
 //   node <skill>/scripts/livecheck.mjs [--keys "ArrowRight:down@0.2, Space:press@1.0, ArrowRight:up@2, Move:960x360@2.2, Click:960x360@2.5"] [--shots 0.5,1.2,2.5]
 //   (Move/Click take view pixels, e.g. 960x360 on a 1920×1080 view; Down:XxY@t moves and holds the left button, Up:_@t releases,
 //    Wheel:±1@t scrolls — hold-to-use tools, aim-and-release, hotbar wheels)
-//        [--for 4] [--url http://127.0.0.1:PORT/live/index.html] [--out frames/livecheck] [--reload] [--eval "SCENE.state.x"] [--minfps 55]
+//        [--for 4] [--url http://127.0.0.1:PORT/live/index.html] [--out frames/livecheck] [--reload] [--eval "SCENE.state.x"] [--minfps 55] [--scale 0.75]
 // Clears the saved session, starts play mode with the first key, runs the timed key script (down/up/press @ seconds),
 // takes screenshots at --shots, optionally touches sim.js to prove hot-reload keeps the play state (--reload), and
-// prints one JSON line: { errors, fps, dev, evals, shots }. Exit code 2 on page errors or fps < --minfps (default 55).
+// prints one JSON line: { errors, fps, perf, dev, evals, shots }. Exit code 2 on page errors or fps < --minfps (default 55).
 // Without --url it serves the project itself on a free port.
 import http from 'node:http'; import fs from 'node:fs'; import path from 'node:path'; import { createRequire } from 'node:module';
 const here = import.meta.dirname;
@@ -20,6 +20,7 @@ if (!url) {
       if (q.method === 'HEAD') return r.end(); fs.createReadStream(f).pipe(r); }); });
   await new Promise((r) => srv.listen(0, '127.0.0.1', r)); url = `http://127.0.0.1:${srv.address().port}/live/index.html`;
 }
+if (opt('scale')) url += (url.includes('?') ? '&' : '?') + 'scale=' + opt('scale');   // --scale 0.75: a phone's render resolution
 const out = opt('out', 'frames/livecheck'); fs.mkdirSync(out, { recursive: true });
 const browser = await chromium.launch({ args: ['--use-angle=' + (process.platform === 'darwin' ? 'metal' : 'default'), '--enable-gpu', '--ignore-gpu-blocklist'] });
 const vw = +opt('vw', 1280), p = await browser.newPage({ viewport: { width: vw, height: Math.round(vw * 9 / 16) } });   // --vw 1920: full-size shots
@@ -47,5 +48,6 @@ const evals = []; for (const x of args.filter((a, i) => args[i - 1] === '--eval'
 await p.waitForTimeout(1200);
 const dev = (await p.textContent('#dev').catch(() => '')) || '';
 const fps = Math.round(await p.evaluate(() => new Promise((res) => { let n = 0; const t0 = performance.now(); const f = () => { n++; if (performance.now() - t0 < 1000) requestAnimationFrame(f); else res(n * 1000 / (performance.now() - t0)); }; requestAnimationFrame(f); })));
-console.log(JSON.stringify({ errors, fps, dev, reload, evals, shots: files }));
+const perf = await p.evaluate(() => window.__perf ? window.__perf() : null);   // frame/cpu p50/p95, draws, programs, texture MB (performance.md §11)
+console.log(JSON.stringify({ errors, fps, perf, dev, reload, evals, shots: files }));
 await browser.close(); if (srv) srv.close(); if (errors.length || fps < +opt('minfps', 55)) process.exit(2);

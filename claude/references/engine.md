@@ -53,15 +53,18 @@ Rules:
 
 ## 3. gl.js
 
-- `G.init(canvas, W, H)`
+- `G.init(canvas, W, H, { scale, preserve })`: W×H is the view every draw uses; `scale` (0.25..1) renders the backbuffer and all of lib's targets at fewer pixels (index.html picks it: never above what the screen shows, phones ≤ 0.75, `?scale=k` overrides, `?render=1` = 1). `preserve` only for screenshots.
 - `G.load(name, url, {repeat, nearest})`. `nearest`: NEAREST min/mag, no mipmaps (lod bias does nothing). index.html sets it for the names in `SCENE.NEAREST`, or for all when `SCENE.NEAREST = true`.
 - `G.canvasTex(name, canvas)`
-- `G.tex(name)` returns `{t, w, h}`.
+- `G.tex(name)` returns `{t, w, h}`; for a name packed by `atlas.py` it returns the atlas texture plus `src` (its uv rect) and its own w, h, so every draw path handles atlased names unchanged.
 - `G.program(name, fragSrc)`. The vertex shader is fixed. The fragment shader gets `v_uv` (0..1 over the quad, flipped by `u_flip`), `v_px` (screen px), `u_res` and `u_t`, plus the COMMON helpers `hash`, `vnoise`, `fbm` and `scr(px)` (screen px to render-target uv).
 - `G.target(w, h, float, {view, nearest})`: `view` = the coordinate space draws use (default `[w, h]`), so a small target can still be drawn in view px; `nearest` samples it crisp. `G.bind(target | null, clearRGBA?)`
 - `G.blend('add' | 'screen' | 'none' | default=premultiplied over)`
 - `G.xf(x, y, w, h, rot, px, py)` gives an affine for a quad with top-left (x, y), size w×h, rotated about the pivot (px, py) in local px.
-- `G.draw(P, uniforms, xf, flip)` and `G.full(P, uniforms)`. Only `u_res`, `u_xf` and `u_flip` are set for you; every other uniform, `u_t` included, belongs to its program and keeps its last value (0 if never set). A helper whose shader animates takes `t` and passes it on every draw.
+- `G.batch(name)` returns a reusable instanced batch for one texture (or atlas): `b.add(x, y, w, h, { rot, pivot, src, flip, alpha, tint })` per quad, `b.flush()` once = one draw call (`performance.md` §1). `b.lod` = mip bias.
+- `G.onScreen(x, y, w, h, margin)`: is the rect visible in the bound target? (`L.sprite` culls with it automatically; `noCull: true` opts out.)
+- `G.stats` = `{ draws, progs, inst }` of the current frame; `G.frame()` (index.html, once per frame) moves them to `G.last`. `window.__perf()` adds frame/CPU p50/p95, texture MB, heap; `?perf=1` or F shows it.
+- `G.draw(P, uniforms, xf, flip)` and `G.full(P, uniforms)`. Never call `gl.useProgram`, `gl.bindVertexArray` or `vertexAttribPointer` directly: gl.js caches that state, so go through `G.program` / `G.draw` / `G.batch`. Only `u_res`, `u_xf` and `u_flip` are set for you; every other uniform, `u_t` included, belongs to its program and keeps its last value (0 if never set). A helper whose shader animates takes `t` and passes it on every draw.
 
 Textures are uploaded **premultiplied** (no dark halos) with mipmaps and LINEAR_MIPMAP_LINEAR, or NEAREST without mips (`SCENE.NEAREST`). Pixel art: `SCENE.NEAREST = true`, `L.init(W, H, extra, { pixel: k })`, positions snapped to multiples of k (`styles.md`).
 
@@ -243,8 +246,10 @@ All run from the project root.
 
 ## 10. Performance budget
 
-The target is 60 fps at 1920×1080 on a laptop GPU.
+The target is 60 fps on a mid-range phone, not only on a laptop; the full doctrine and the per-project plan (`study/PERF.md`) are
+in `performance.md`. In short:
+- Budgets: frame p95 ≤ 16.7 ms, CPU p95 ≤ 8 ms, ≤ 250 draw calls (peak 400), ≤ 10 full-screen passes, ≤ 150 MB textures.
 - Quads are cheap; full-screen passes are not. Each fog strip is a full-width pass; the god-ray pass loops 72 samples at half res; bloom runs at quarter and eighth res. Add full-screen passes only where they show.
+- Numerous simple sprites go through `G.batch` (one draw call), and through an atlas when they are several names in one layer.
 - The ink pass draws the group n times (default 8) before the group itself, so keep it to what needs the weighted line.
-- Spend particle and FX quads where the eye is; measure the cost with `livecheck.mjs` rather than trusting a fixed cap.
-- If fps drops, measure with `livecheck.mjs` first, then cut what the eye misses least (ambient particles, extra full-screen passes) before touching the look of actors.
+- If fps drops, measure first (`livecheck.mjs` `perf`, `?perf=1`), then cut what the eye misses least (ambient particles, extra full-screen passes) before touching the look of actors.

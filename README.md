@@ -90,6 +90,16 @@ Agent    Foot paths planted, knees by IK. A foot-slide check now runs on every c
 - 🕹️ **Any 2D genre, any style.** Platformer, top-down, isometric, shmup, puzzle, card games;
   pixel, painterly, cel and ink, flat vector, watercolour, neon.
 
+## Performance first (Claude Code edition)
+
+Every game is planned for a mid-range phone from the first step, not optimized at the end. Before the systems are coded, the
+agent writes `study/PERF.md`: the max count of every system and, per system, its object pool, collision grid, update rate,
+batch/atlas and culling, each sized to that game's mechanic. The engine does the generic part by itself: GL state caching,
+offscreen culling, instanced batches (`G.batch`, hundreds of bullets or particles in one draw call), texture atlases
+(`atlas.py`), a render scale that never draws more pixels than the screen shows, and live counters (`?perf=1` or F: frame
+time p50/p95, draw calls, texture memory). The plan and the measured numbers ship in the game's README. Details:
+[`claude/references/performance.md`](claude/references/performance.md).
+
 ## Examples
 
 **A top-down pixel farm at night**

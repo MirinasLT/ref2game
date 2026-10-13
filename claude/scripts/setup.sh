@@ -38,6 +38,9 @@ case "$GENRE" in side) GT="$SKILL/templates/live";; top) GT="$SKILL/templates/li
 for f in index.html tune.cjs; do cp_new "$SKILL/templates/live/$f" "$PROJ/live/$f"; done
 # stubs the page always loads: display sizes (written later from the art scale) and the sound module
 [ -e "$PROJ/live/sizes.js" ] || printf '// in-game sprite sizes in view px: { name: [w, h] } (engine.md §7 "Display size vs texture size")\nwindow.SIZES = window.SIZES || {};\n' > "$PROJ/live/sizes.js"
+[ -e "$PROJ/live/atlas.js" ] || printf '// written by scripts/atlas.py: name -> [atlas, u0, v0, u1, v1, w, h] (performance.md §1)
+window.ATLAS = window.ATLAS || {};
+' > "$PROJ/live/atlas.js"
 [ -e "$PROJ/live/audio.js" ] || printf '// live/audio.js: sound driven by the sim event bus (S.ev). Stub until the game gets sound.\n' > "$PROJ/live/audio.js"
 [ "$GSET" = 1 ] && [ -e "$PROJ/live/sim.js" ] && echo "note: kept the existing live/sim.js and live/scene.js; to switch the base to --genre $GENRE, move them aside and re-run"
 for f in sim.js scene.js; do cp_new "$GT/$f" "$PROJ/live/$f"; done
@@ -72,6 +75,7 @@ STYLE BIBLE (replace after the study; keep it short, measured from the reference
 Light: <one fixed light sentence: key direction and colour, fill colour, no cast shadow>.
 Strict <projection/view>. No text, no logos, no watermark, no glow, no light rays, no cast shadows.
 TXT
+cp_new "$SKILL/templates/PERF.md" "$PROJ/study/PERF.md"        # the performance plan, filled in Phase 1 (performance.md §12)
 (cd "$PROJ" && python3 "$SKILL/scripts/placeholders.py" --out art/gen --set "$GENRE" >/dev/null && python3 "$SKILL/scripts/prep.py" >/dev/null)
 echo "project ready: $PROJ"
 echo "  live preview : (cd $PROJ && bash $SKILL/scripts/serve.sh)      # prints the URL; keep it open while you work"

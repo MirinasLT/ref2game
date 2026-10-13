@@ -52,6 +52,12 @@ This folder is self-contained: scripts, engine templates, references and Playwri
    - Render is a function of time and sim state.
    - The level is data.
    - The attract demo is a scripted replay, checked headless.
+10. **Performance first, for phones.** The game must hold 60 fps on a mid-range phone, so performance is architecture decided in Phase 1, not a fix at the end (`references/performance.md`).
+   - Before coding the systems, write `study/PERF.md`: the max simultaneous count of every system, and per system its pool, collision broad phase, update tier, batch/atlas group and cull rule, each with its reason.
+   - Fit the mechanic: a 40-object puzzle needs no pools or grids; a shmup needs all of them. The simplest structure that holds the budget wins.
+   - Use what the engine does (state caching, auto-culling, render scale, `G.batch`, atlases, counters); never duplicate it.
+   - Hot paths allocate nothing: pools of plain objects in `S`, grids and scratch typed arrays at module scope.
+   - Measure, don't guess: `livecheck.mjs` prints `perf` (frame p50/p95, draws, texture MB); compare it with PERF.md at each gate.
 
 The references are background knowledge, not rules: the reference and the user decide.
 
@@ -98,9 +104,11 @@ Send the live URL right away.
    - start the first batch in the background: the pieces the first frame needs most (e.g. the backdrop, the main depth bands, terrain, the hero anchor).
 2. **While it runs, finish the study** (including `study/MATCH.md`: the reference decomposed into a stageable layout, `study.md` §4.7):
    - `study/STYLE.md`;
-   - `study/PLAN.md`: layers, assets in generation order, effects, interactions, level data, attract beats.
+   - `study/PLAN.md`: layers, assets in generation order, effects, interactions, level data, attract beats;
+   - `study/PERF.md` (seeded by setup.sh): entity budget and the per-system decisions (`performance.md` §12). Short, but before step 3.
 3. **Shape the base into this game on placeholders:**
    - the mover or interaction model;
+   - pools, collision broad phase and update tiers as PERF.md decided them (`performance.md` §2, §3, §7), built in from the start;
    - collision;
    - sort order;
    - camera;
@@ -123,7 +131,7 @@ Send the live URL right away.
    - A change of texture resolution or display size lands **in the same step** as the scene code that sizes it (`SIZES`): the user is watching the live page, and oversized sprites, even briefly, read as broken.
 3. **While images generate,** build the effects this reference and style need (`references/effects.md`, `references/styles.md`).
 4. **Hero.** Approve the hero anchor in a real rig pose (feet under the hips, free limbs), then make its part sheet and variants (`variantfix.py`). Do the same for every actor in the animation list (`animation.md` §13), NPCs and animals included.
-5. **Gate A.** `qa.mjs` passes (seconds). Launch the asset + frame + fidelity critics in the background (the fidelity critic on `frames/qa/match.png`) and send the live page and a few stills right away; keep working, and fold the critics' top fixes into the next iteration when they land.
+5. **Gate A.** `qa.mjs` passes (seconds); `livecheck.mjs` `perf` is within the PERF.md budgets (record it in PERF.md §5). Launch the asset + frame + fidelity critics in the background (the fidelity critic on `frames/qa/match.png`) and send the live page and a few stills right away; keep working, and fold the critics' top fixes into the next iteration when they land.
 
 ## Phase 3: make it alive
 
@@ -132,7 +140,8 @@ Send the live URL right away.
 3. **Attract demo.** Tune it headless: `node live/tune.cjs`.
 4. **Module critic** per finished module.
 5. **Gate B.**
-   - `qa.mjs` passes; launch the frame, fidelity, motion and game critics in the background and run the interaction audit meanwhile. Hand back without waiting; the scores follow in the next message.
+   - `qa.mjs` passes; `livecheck.mjs` `perf` holds the PERF.md budgets in normal play **and** in a stress case at the design's max counts (record both in PERF.md §5; over budget → `performance.md` §10, ask before changing the look).
+   - Launch the frame, fidelity, motion and game critics in the background and run the interaction audit meanwhile. Hand back without waiting; the scores follow in the next message.
    - Send the hand-back (`references/delivery.md`): the URL, what to try, what changed, known gaps.
 
 ## Phase 4: feedback loop
@@ -164,6 +173,7 @@ For each note:
   - After a sim change, run `tune.cjs`.
   - After a scene or lib change, run `livecheck.mjs`.
 - **Pitfalls:** skim `references/pitfalls.md` once per project.
+- **Performance:** read `references/performance.md` once per project, before writing PERF.md.
 
 ## References
 
@@ -181,6 +191,7 @@ For each note:
 | `critics.md` | Critic types (incl. the fidelity critic), briefs, rounds |
 | `pitfalls.md` | Bugs that cost hours before |
 | `delivery.md` | Hand-back messages and packing |
+| `performance.md` | Phone-first performance: batching/atlases, pools, spatial grid, overdraw, culling/chunking, update tiers, GC, texture memory, profiling and budgets, the PERF.md plan |
 
 ## Scripts (run from the project root; `<skill>` = this folder)
 
@@ -190,14 +201,15 @@ For each note:
 | `serve.sh` | Live preview server |
 | `gen.py check / one / batch / key / validate / pixel` | Generation with any provider (style bible and refs on every call, alpha, logs, parallel batches); offline alpha and pixel tools |
 | `provider_template.py` | Skeleton for a new API plugin (`art/providers/<name>.py`) |
-| `slice.py`, `prep.py`, `variantfix.py` | Cut sheets; turn art/gen into live/assets; make variants differ only where they changed |
+| `slice.py`, `prep.py`, `variantfix.py` | Cut sheets; turn art/gen into live/assets (`maxper` caps small sprites' texture size); make variants differ only where they changed |
+| `atlas.py <atlas> names… [--glob]` | Pack textures drawn in one layer into one atlas (`live/atlas.js`); they then share one texture and one `G.batch` |
 | `placeholders.py` | Stand-in art for the base's asset names |
 | `sheet.py` | Contact and cycle sheets |
 | `rigcut.py`, `partrig.py` | Cut-out rig from the approved drawing / from a part sheet (body, one leg, one arm, weapon) → parts + `live/rigs.js` |
 | `jointr.py` | Limb half-widths at elbows and knees → round joint caps (`animation.md` §15.5) |
 | `softbones.py` | Weight maps for bending one painted sprite (an animal's neck, head, tail) in the shader (`animation.md` §15.6) |
 | `render.mjs stills / video` | Deterministic renders of the live page |
-| `livecheck.mjs` | Headless play-test: keys, pointer (click, hold, release, wheel), screenshots, errors, fps, hot reload |
+| `livecheck.mjs` | Headless play-test: keys, pointer (click, hold, release, wheel), screenshots, errors, fps, `perf` (frame/CPU p50/p95, draw calls, texture MB), hot reload |
 | `qa.mjs` | Automatic polish checks from `SCENE.QA()`: HUD text overflow/overlap, emitter anchors, limb motion of walk cycles (+ cycle sheets), rig checks, frozen effects and sweeps (`anim`), and the measured rig checks from the joint trace (foot slide, ground, lift, limp, stride, knee, stretch, arm phase, rigid-only motion, aim at the impact, pops, coverage) |
 | `pack.py` | Static playable build and asset pack |
 | `study.py`, `compare.py` | Reference analysis; reference vs render |

@@ -9,7 +9,10 @@ mipmaps and blur), trimmed to the alpha box + 4 px (unless listed in notrim), ca
   and bottom (last such row) — the walkable top line of platform pieces, so colliders come from data, not guesses.
 
 Config: ref2game.json → "prep": { "src": "art/gen", "dst": "live/assets", "manifest": "live/assets.js",
-  "notrim": ["bg_*", "*_tex"], "skip": ["*_sheet"], "max": 2048, "walk": { "ground": 0.6, "ledge*": 0.45 } }
+  "notrim": ["bg_*", "*_tex"], "skip": ["*_sheet"], "max": 2048, "maxper": { "coin": 192, "fx_*": 128 },
+  "walk": { "ground": 0.6, "ledge*": 0.45 } }
+maxper caps matching names harder than max: about 2 x their display size (SIZES), so a small sprite doesn't cost a big
+texture's GPU memory (performance.md section 9). First matching pattern wins.
 Incremental: unchanged sources are skipped (use --all after changing the rules). prep is a PURE function of art/gen:
 anything you fix by hand or by script (variant alignment, seam repair) must be written back into art/gen, never into
 live/assets, or the next prep run silently undoes it.
@@ -19,7 +22,7 @@ import numpy as np
 from PIL import Image, ImageFilter
 
 DEF = {'src': 'art/gen', 'dst': 'live/assets', 'manifest': 'live/assets.js', 'notrim': ['bg_*', '*_tex'], 'skip': ['*_sheet', '*_raw'],
-       'max': 2048, 'walk': {}}
+       'max': 2048, 'maxper': {}, 'walk': {}}
 
 
 def match(n, pats): return any(fnmatch.fnmatch(n, p) for p in pats)
@@ -38,7 +41,8 @@ def prep_one(src, n, cfg):
     if not match(n, cfg['notrim']):
         bb = Image.fromarray(((al > 0.08) * 255).astype(np.uint8)).getbbox()
         if bb: box = (max(0, bb[0] - 4), max(0, bb[1] - 4), min(im.width, bb[2] + 4), min(im.height, bb[3] + 4)); im = im.crop(box)
-    s = min(1.0, cfg['max'] / max(im.size))
+    cap = next((v for pat, v in cfg['maxper'].items() if fnmatch.fnmatch(n, pat)), cfg['max'])
+    s = min(1.0, min(cap, cfg['max']) / max(im.size))
     if s < 1: im = im.resize((round(im.width * s), round(im.height * s)), Image.LANCZOS)
     d = {'w': im.width, 'h': im.height, 'crop': list(box), 'scale': round(s, 5)}
     for pat, f in cfg['walk'].items():

@@ -21,13 +21,19 @@ const V = Date.now(), STATIC = !!window.__STATIC__;          // STATIC: packed b
 const load = (src) => new Promise((res, rej) => { const s = document.createElement('script'); s.src = src + '?v=' + V; s.onload = res; s.onerror = () => rej(new Error('failed ' + src)); document.head.appendChild(s); });
 (async () => {
   // sizes.js: window.SIZES (display size per sprite in view px, engine.md §7); audio.js: sound from the event bus (stub until used)
-  for (const f of ['assets.js', 'sizes.js', 'gl.js', 'lib.js', 'sim.js', 'scene.js', 'audio.js']) await load(f);
+  // atlas.js: window.ATLAS from scripts/atlas.py (packed names load as one sheet; stub until a project packs one)
+  for (const f of ['assets.js', 'sizes.js', 'atlas.js', 'gl.js', 'lib.js', 'sim.js', 'scene.js', 'audio.js']) await load(f);
   const q = new URLSearchParams(location.search), render = q.has('render');
   const VW = (SIM.VIEW || {}).W || 1920, VH = (SIM.VIEW || {}).H || 1080;             // view size and aspect come from the sim
   document.documentElement.style.setProperty('--ar', VW / VH); if (SIM.HINT) document.getElementById('hint').textContent = SIM.HINT;
-  G.init(document.getElementById('c'), VW, VH);
+  // render scale: never more pixels than the screen shows; phones (coarse pointer) cap at 0.75. ?scale=k overrides; renders stay 1.
+  const cvs = document.getElementById('c'), shown = cvs.getBoundingClientRect().width * devicePixelRatio / VW;
+  const scale = render ? 1 : +(q.get('scale') || Math.max(0.5, Math.min(1, shown || 1, matchMedia('(pointer: coarse)').matches ? 0.75 : 1)));
+  G.init(cvs, VW, VH, { scale, preserve: render });
   const rep = new Set(SCENE.REPEAT || []), near = (n) => SCENE.NEAREST === true || (SCENE.NEAREST || []).includes(n);   // NEAREST: true = all
-  await Promise.all(Object.keys(ASSETS).map((n) => G.load(n, 'assets/' + n + '.png?v=' + V, { repeat: rep.has(n), nearest: near(n) })));
+  const AT = window.ATLAS || {}, sheets = [...new Set(Object.values(AT).map((a) => a[0]))];
+  await Promise.all([...Object.keys(ASSETS).filter((n) => !AT[n]), ...sheets]
+    .map((n) => G.load(n, 'assets/' + n + '.png?v=' + V, { repeat: rep.has(n), nearest: near(n) })));
   SCENE.programs();
   window.__duration = SIM.L;
   window.__renderAt = (t) => { SCENE.render(t); return document.getElementById('c').toDataURL('image/png'); };
@@ -44,6 +50,7 @@ const load = (src) => new Promise((res, rej) => { const s = document.createEleme
   addEventListener('keydown', (e) => {
     const c = e.code;
     if (c === 'KeyP') { paused = !paused; e.preventDefault(); return; }
+    if (c === 'KeyF' && !STATIC) { perfOn = !perfOn; return; }                              // perf overlay (packed build: ?perf=1)
     if (c === 'Period') { stepOnce = true; paused = true; e.preventDefault(); return; }
     if (c === 'BracketLeft') { speed = SPEEDS[Math.max(0, SPEEDS.indexOf(speed) - 1)]; return; }
     if (c === 'BracketRight') { speed = SPEEDS[Math.min(SPEEDS.length - 1, SPEEDS.indexOf(speed) + 1)]; return; }
@@ -63,8 +70,19 @@ const load = (src) => new Promise((res, rej) => { const s = document.createEleme
   addEventListener('pointerdown', (e) => { toView(e); ptr.down = 1; ptr.click = 1; if (!play) { play = SIM.spawn(simT); hint.style.opacity = 0; } });
   addEventListener('pointerup', () => { ptr.down = 0; });
   let last = performance.now(), fpsAcc = 0, fpsN = 0;
+  // profiling (references/performance.md §11): frame interval and CPU time (sim + render submit) over the last 240 frames,
+  // draw calls / program switches / instanced quads per frame, JS heap, texture memory. ?perf=1 or F shows it; __perf() returns it.
+  const PN = 240, pf = { frame: new Float32Array(PN), cpu: new Float32Array(PN), i: 0, n: 0 };
+  let perfOn = q.has('perf');
+  const pct = (a, n, k) => { const s = Array.from(a.subarray(0, n)).sort((x, y) => x - y); return s[Math.min(n - 1, Math.floor(n * k))] || 0; };
+  window.__perf = () => { const n = pf.n, g = G.last || G.stats, mem = performance.memory;
+    let tex = 0; for (const n2 of [...Object.keys(ASSETS).filter((x) => !AT[x]), ...sheets]) { try { const t = G.tex(n2); tex += t.w * t.h * 4 * (near(n2) ? 1 : 1.34); } catch (e) {} }
+    return { fps: +fps.toFixed(1), frameP50: +pct(pf.frame, n, 0.5).toFixed(2), frameP95: +pct(pf.frame, n, 0.95).toFixed(2),
+      cpuP50: +pct(pf.cpu, n, 0.5).toFixed(2), cpuP95: +pct(pf.cpu, n, 0.95).toFixed(2), draws: g.draws, progs: g.progs, inst: g.inst,
+      scale: G.SCALE, texMB: +(tex / 1048576).toFixed(1), heapMB: mem ? +(mem.usedJSHeapSize / 1048576).toFixed(1) : null }; };
   const loop = () => {
     const now = performance.now(), wall = Math.min(0.1, (now - last) / 1000); last = now;
+    pf.frame[pf.i] = wall * 1000;
     fpsAcc += wall; fpsN++; if (fpsAcc > 0.5) { fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; }
     const dt = paused ? (stepOnce ? 1 / 60 : 0) : wall * speed; stepOnce = false;
     simT += dt;
@@ -77,8 +95,11 @@ const load = (src) => new Promise((res, rej) => { const s = document.createEleme
       SCENE.state = play;
     } else SCENE.state = null;
     try { SCENE.render(simT); } catch (e) { if (!window.__renderErr) { window.__renderErr = e; console.error(e); } }   // log once, keep the loop alive
-    if (!STATIC) dev.style.display = (paused || speed !== 1 || q.has('dev')) ? 'block' : 'none';   // debug line only when paused / slowed or with ?dev
-    if (!STATIC) dev.textContent = `LIVE  ${play ? 'play' : 'demo'}  ${paused ? 'PAUSED' : speed + '×'}  ${fps.toFixed(0)} fps   P pause  [ ] speed  . step  Esc demo  R restart`;
+    pf.cpu[pf.i] = performance.now() - now; pf.i = (pf.i + 1) % PN; pf.n = Math.min(PN, pf.n + 1); G.frame();
+    dev.style.display = (perfOn || (!STATIC && (paused || speed !== 1 || q.has('dev')))) ? 'block' : 'none';   // debug line only when paused / slowed, ?dev or perf
+    if (perfOn && pf.i % 15 === 0) { const r = __perf(); dev.textContent = `${r.fps} fps  frame ${r.frameP50}/${r.frameP95} ms (p50/p95)  cpu ${r.cpuP50}/${r.cpuP95} ms\n` +
+      `draws ${r.draws}  programs ${r.progs}  instanced ${r.inst}  scale ${r.scale}  tex ${r.texMB} MB  heap ${r.heapMB ?? '?'} MB`; }
+    else if (!perfOn && !STATIC) dev.textContent = `LIVE  ${play ? 'play' : 'demo'}  ${paused ? 'PAUSED' : speed + '×'}  ${fps.toFixed(0)} fps   P pause  [ ] speed  . step  Esc demo  R restart  F perf`;
     requestAnimationFrame(loop);
   };
   loop();

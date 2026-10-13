@@ -338,10 +338,12 @@ void main(){ vec2 p = (v_uv - 0.5) * u_sz; vec2 q = abs(p) - (u_sz * 0.5 - u_r);
     W = L.W = w; H = L.H = h; P = L.P = {}; L.PIXEL = Math.max(1, pixel);
     for (const k in SH) P[k.toLowerCase()] = G.program(k.toLowerCase(), SH[k]);
     for (const k in extra) P[k] = G.program(k, extra[k]);
-    const px = L.PIXEL, lo = { view: [w, h], nearest: px > 1 };
-    T.bg = G.target(Math.round(w / px), Math.round(h / px), true, lo); T.comp = G.target(Math.round(w / px), Math.round(h / px), true, lo);
-    T.mask = G.target(w / 2, h / 2, true); T.rays = G.target(w / 2, h / 2, true);
-    T.b1 = G.target(w / 4, h / 4); T.b2 = G.target(w / 4, h / 4); T.c1 = G.target(w / 8, h / 8); T.c2 = G.target(w / 8, h / 8);
+    // G.SCALE (render scale, index.html) shrinks every target; draws keep using view px, so scenes never see it
+    const px = L.PIXEL, k = px > 1 ? 1 / px : (G.SCALE || 1), lo = { view: [w, h], nearest: px > 1 };
+    const tg = (d, f) => G.target(Math.max(1, Math.round(w * k / d)), Math.max(1, Math.round(h * k / d)), f, { view: [w / d, h / d] });
+    T.bg = G.target(Math.round(w * k), Math.round(h * k), true, lo); T.comp = G.target(Math.round(w * k), Math.round(h * k), true, lo);
+    T.mask = tg(2, true); T.rays = tg(2, true);
+    T.b1 = tg(4); T.b2 = tg(4); T.c1 = tg(8); T.c2 = tg(8);
     L.T = T; L.SUN = [w * 0.31, h * 0.25];
   };
 
@@ -373,13 +375,17 @@ void main(){ vec2 p = (v_uv - 0.5) * u_sz; vec2 q = abs(p) - (u_sz * 0.5 - u_r);
     const sw = tx.w * (src[2] - src[0]), sh = tx.h * (src[3] - src[1]);
     let w = o.w, h = o.h; if (w && !h) h = w * sh / sw; if (h && !w) w = h * sw / sh; if (!w) { w = sw; h = sh; }
     const pad = o.pad || 0, pw = w * pad, ph = h * pad;
+    // offscreen culling (free for every scene): skip quads fully outside the target; rotation grows the box conservatively
+    if (!o.m && !o.noCull) { const r = o.rot ? Math.max(w, h) * 1.5 : 0, sp = L.sp ? 48 : 0;
+      if (!G.onScreen(x - pw - r + (L.sp ? L.sp.dx : 0), y - ph - r + (L.sp ? L.sp.dy : 0), w + 2 * pw + 2 * r, h + 2 * ph + 2 * r, 8 + sp)) return { w, h }; }
     const U = Object.assign({}, DEF, o.u || {}, { u_tex: tx });
     if (L.sp) { const sp = L.sp;
       Object.assign(U, { grade: sp.ink ? [0, 0, 1, 1] : [0, 0, 0, 1], haze: sp.ink || U.haze, alpha: sp.a * (U.alpha === undefined ? 1 : U.alpha), lod: sp.lod || 0, rim: [0, 0, 0, 0], tint: [1, 1, 1, 0] });
       x += sp.dx; y += sp.dy; if (o.m) o = Object.assign({}, o, { m: M.mul(M.t(sp.dx, sp.dy), o.m) }); }
     const uni = {}; for (const k in U) uni[k.startsWith('u_') ? k : 'u_' + k] = U[k];
     uni.u_pad = [pad / (1 + 2 * pad), pad / (1 + 2 * pad)];
-    uni.u_src = src;
+    const at = tx.src;     // atlased texture: the requested rect lives inside the atlas rect
+    uni.u_src = at ? [at[0] + (at[2] - at[0]) * src[0], at[1] + (at[3] - at[1]) * src[1], at[0] + (at[2] - at[0]) * src[2], at[1] + (at[3] - at[1]) * src[3]] : src;
     const rot = o.rot || 0, piv = o.pivot || [0, 0];
     if (o.m) { const F = M.mul(o.m, [w + 2 * pw, 0, 0, h + 2 * ph, -pw - piv[0], -ph - piv[1]]);
       G.draw(P.sprite, uni, [F[0], F[1], 0, F[2], F[3], 0, F[4], F[5], 1], [o.flip ? 1 : 0, 0]); return { w, h }; }
@@ -504,11 +510,17 @@ void main(){ vec2 p = (v_uv - 0.5) * u_sz; vec2 q = abs(p) - (u_sz * 0.5 - u_r);
   L.foam = (t, x, y, w, h, amt = 1) => G.draw(P.foam, { u_t: t, u_amt: amt }, G.xf(x, y, w, h));
   // a thin veil of the shafts over the play plane, then dust motes that light up inside the shafts
   L.veil = (amt = 0.14, col = [1.0, 0.86, 0.6]) => { G.blend('screen'); if (!L.NOFX) G.full(P.rayadd, { u_src: T.rays, u_amt: amt, u_col: col }); G.blend(); };
+  // one instanced draw for all motes (performance.md §1, §6)
+  const MOTEB = `uniform sampler2D u_rays;
+void main(){ float d = length(v_uv * 2.0 - 1.0); float g = exp(-d * d * 5.0) * smoothstep(1.0, 0.5, d);
+  float r = texture(u_rays, scr(v_px)).r; o = vec4(v_col.rgb * g * (0.15 + 3.0 * r), 0.0); }`;
+  const moteO = { alpha: 1, tint: null };
   L.motes = (t, { n = 140, amt = 0.35, col = [1.0, 0.92, 0.7], h = 900 } = {}) => { G.blend('add');
+    const B = G.batch('motes', 512, MOTEB); B.u.u_rays = T.rays; moteO.alpha = amt; moteO.tint = col;
     for (let i = 0; i < n; i++) { const h1 = L.rnd(i, 1), h2 = L.rnd(i, 2), h3 = L.rnd(i, 3);
       const mx = ((h1 * W + t * (8 + 10 * h3) + 30 * Math.sin(t * 0.5 + i)) % W + W) % W, my = ((h2 * (h - 100) + 40 + 20 * Math.sin(t * 0.7 + i * 1.3)) % h + h) % h, r = 3 + 4 * h3;
-      G.draw(P.mote, { u_rays: T.rays, u_amt: amt, u_col: col }, G.xf(mx - r, my - r, 2 * r, 2 * r)); }
-    G.blend(); };
+      B.add(mx - r, my - r, 2 * r, 2 * r, moteO); }
+    B.flush(); G.blend(); };
   // bloom (two radii) + final grade (warm highs, cool lows, hue-keeping roll-off, vignette, dither) → screen, then HUD-ready.
   // warm scales the warm-high/cool-low tint, roll the highlight roll-off (0 = none), dither 0/1. Pixel/flat/neon styles that
   // need exact palette colours: { bloom: [0, 0], warm: 0, roll: 0, dither: 0 }
