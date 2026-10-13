@@ -13,6 +13,7 @@ A tiny WebGL2 renderer, a deterministic sim and a scene file that is a pure func
 8. Determinism rules
 9. Tools: render.mjs, livecheck.mjs, tune.cjs
 10. Performance budget
+11. The game shell: input, settings and quality, menu, sound, lifecycle
 
 ---
 
@@ -20,8 +21,12 @@ A tiny WebGL2 renderer, a deterministic sim and a scene file that is a pure func
 
 | File | Owns | Changes per project? |
 |---|---|---|
-| `live/index.html` | Loading (cache-busted), canvas (aspect from `SIM.VIEW`), hint (`SIM.HINT`), attract vs play, input (keys + pointer), respawn, dev keys, hot-reload polling, sessionStorage state | Rarely: key bindings |
-| `live/gl.js` | WebGL2 context, premultiplied textures (mipmapped, or nearest), programs (with COMMON: hash, vnoise, fbm, scr), float render targets, blend modes, affine quads | No (`setup.sh --refresh-engine` updates it) |
+| `live/index.html` | The game shell: loading (cache-busted), canvas (aspect from `SIM.VIEW`), hint, attract vs play, the fixed-step loop with render interpolation, sim events → sound and result cards, respawn, pause on hidden tab, WebGL context-loss recovery, dev keys, hot-reload polling, sessionStorage state (dropped when the sim's shape changed) | No (engine; `--refresh-engine`) |
+| `live/gl.js` | WebGL2 context, caps (`G.CAPS`: hdr targets, max texture size), premultiplied textures (mipmapped, or nearest; downscaled past the GPU limit), programs (COMMON: hash, vnoise, fbm with `FBM_OCT` octaves, scr), checked render targets (half-float or RGBA8 fallback), resize/free, cached GL state (program, VAO, blend, unchanged uniforms and bound textures skipped), affine quads, instanced batches | No (`setup.sh --refresh-engine` updates it) |
+| `live/settings.js` | `SET` (player options, localStorage), `Q` (quality tier knobs), the pause / settings / result menu, render-scale fit on resize, the adaptive quality governor | No (engine) |
+| `live/input.js` | One input record from keyboard (latched taps, no stuck keys), pointer, touch (floating stick + buttons from `SIM.CONTROLS`) and gamepad | No (engine) |
+| `live/snd.js` | Sound engine: procedural SFX voices, sample SFX, streamed or procedural music; zero cost while off | No (engine) |
+| `live/audio.js` | `window.SOUND`: this game's event → sound map, voices, files, song (`audio.md`) | Yes, the game's sound |
 | `live/lib.js` | Shader library, `sprite()`, passes (shadow, ink), primitives (glow, shadow, puff, star, ring, fog), rig helper, glyph text, the frame pipeline | Add shaders through `L.init(w, h, extra)`; edit lib only for engine-wide fixes |
 | `live/sim.js` | Everything that **happens**: movement, collisions, level data, pickups, hazards, critters, reactive props, springs, wind, camera, events | Yes, it is the game |
 | `live/scene.js` | Everything that is **drawn**: layer plan, parallax, placement, rig poses, FX from events, HUD | Yes, it is the look |
@@ -42,18 +47,24 @@ Rules:
 - **Dev keys for inspecting motion:**
   - P pauses;
   - `[` and `]` change speed (0.1 / 0.25 / 0.5 / 1);
-  - `.` single-steps;
-  - Esc returns to the demo;
+  - `.` single-steps (one 1/120 s sim step);
+  - F toggles the perf overlay;
+  - Esc opens the menu (Resume, Restart, Quality, Shadows, Music, Sound, Shake, Touch controls, Fullscreen, Title);
   - R restarts.
+  - The packed build keeps only Esc and R (and F via `?perf=1`).
 - **Query flags:**
   - `?render=1` is the offline renderer mode;
   - `?fx=0` hides fog and rays;
-  - `?only=name1,name2` draws only those sprites, to bisect a stray line or pixel.
+  - `?only=name1,name2` draws only those sprites, to bisect a stray line or pixel;
+  - `?q=low|mid|high` forces a quality tier, `?scale=k` a render scale, `?perf=1` shows the perf overlay.
 - **When you hand back,** tell the user exactly what to try in play mode: which key, where, and what should react.
 
 ## 3. gl.js
 
-- `G.init(canvas, W, H, { scale, preserve })`: W×H is the view every draw uses; `scale` (0.25..1) renders the backbuffer and all of lib's targets at fewer pixels (index.html picks it: never above what the screen shows, phones ≤ 0.75, `?scale=k` overrides, `?render=1` = 1). `preserve` only for screenshots.
+- `G.init(canvas, W, H, { scale, preserve, oct })`: W×H is the view every draw uses; `scale` (0.25..1) renders the backbuffer and all of lib's targets at fewer pixels (settings.js picks it: never above what the screen shows, never above the tier's cap, `?scale=k` overrides, `?render=1` = 1). `oct`: fbm octaves compiled into every shader (tier). `preserve` only for screenshots.
+- `G.resize(scale)` + `L.resize()`: change the render scale at runtime (settings.js does it on window resize, rotation and tier change). Scene-made targets register a maker in `L.onResize` so they follow.
+- `G.CAPS = { hdr, maxTex }`: `G.target(w, h, true)` is half-float when the GPU renders to it, else RGBA8 (checked, never a silent black frame). `G.free(target)` deletes one.
+- GL state is cached: `G.blend(mode)` with the current mode, a uniform with the value this program already has, a texture already on its unit, all cost nothing. Code that binds a texture with raw `gl` calls must call `G.dirtyTex()`.
 - `G.load(name, url, {repeat, nearest})`. `nearest`: NEAREST min/mag, no mipmaps (lod bias does nothing). index.html sets it for the names in `SCENE.NEAREST`, or for all when `SCENE.NEAREST = true`.
 - `G.canvasTex(name, canvas)`
 - `G.tex(name)` returns `{t, w, h}`; for a name packed by `atlas.py` it returns the atlas texture plus `src` (its uv rect) and its own w, h, so every draw path handles atlased names unchanged.
@@ -149,7 +160,12 @@ Deformations are clamped in the shader; `pow()` of a negative base is NaN, so al
 | `DT` | 1/120 fixed step |
 | `L` | Attract loop length (s) |
 | `VIEW` | {W, H} view px (default 1920×1080). The canvas aspect, the scene's W/H and pack.py's README come from it |
-| `HINT` | Optional controls hint shown on the page and in the pack README (fallback: the default arrows/WASD text) |
+| `HINT` | Optional controls hint shown on the page and in the pack README (fallback: the default arrows/WASD text); `HINT_TOUCH` the one on touch screens ("Tap to play") |
+| `CONTROLS` | `{ move: 'x' \| 'xy' \| null, buttons: [[action, label], …], pointer }`: what input.js shows on touch screens (a floating stick for `x`/`xy`, up to 4 buttons, taps passed to the world when `pointer`) |
+| `LERP` | State keys the shell interpolates between the last two steps (numbers or arrays of numbers: positions, camera, `t`). Default `['x', 'y', 'cam', 't']`. Add every moving thing whose position is a top-level key; pooled entities interpolate in the scene with `SCENE.state` vs their stored previous position when they need it |
+| `VERSION` | Optional: bump it when the state's meaning changes without its shape changing, so a hot reload starts a fresh run instead of restoring an incompatible state |
+| `RESULT(e, S)` | Optional: `{ title, lines }` for the card shown on a `win` / `gameover` event (default: "Level complete" / "Game over" + `e.score`) |
+| `FULLSCREEN` | `false` to skip the automatic fullscreen + orientation lock on the first touch in the packed build |
 | `demoCheck(S)` | Optional: does the attract run hit its beats? `tune.cjs` passes on it; without it, every `S.got` ≥ 0 (no `S.got`: pass) |
 | `selfCheck()` | Optional: `[failure strings]` for what the level data must satisfy after every placement pass (every spawn in open space, every enemy able to reach and attack the player, every pickup reachable). `tune.cjs` fails on any |
 | `create()` | Fresh state (plain JSON-able object: sessionStorage keeps it across reloads) |
@@ -161,13 +177,15 @@ Deformations are clamped in the shader; `pow()` of a negative base is NaN, so al
 | `scriptInput(t, S)` | The demo's input at time t (same shape as play input) |
 | Level data and helpers | e.g. `SURF`, `COINS`, `TUFTS`, `yOn`, `groundBelow`, `windAt`, `gustAt`, `gusts`: the scene reads them, it never duplicates them |
 
-Input (built by index.html every step):
-- Keys: `left` (←/A), `right` (→/D), `up` (↑/W), `down` (↓/S), `jump` (Space), `act` (X/J/Enter).
-- Pointer, in view px: `px`, `py`; `press` = button held; `click` = true for exactly one sim step. Any key or pointerdown starts play.
+Input (input.js, one record whatever the device):
+- Actions: `left` (←/A, stick, d-pad), `right`, `up`, `down`, `jump` (Space, pad A, touch button), `act` (X/J/Enter, pad X), `alt` (C/K, pad B/Y); `ax`, `ay` analog −1..1 (stick or pad; keys give ±1). A tap shorter than a frame is latched until the next step, so it always reaches the sim.
+- Pointer, in view px: `px`, `py`; `press` = button held; `click` = true for exactly one sim step; `slot` 1–10 (digit keys), `wheel` ±1 (wheel, pad shoulders). Any input starts play.
+- Read edges in the sim (`jumpHeld && !S.prevJump`), never in the shell. Top-down movers use `inp.ax/ay` for analog speed.
 
 Principles:
 - **Every reaction lives in the sim:** springs, pendulums, critter FSMs, foliage, camera. The demo and play then behave the same, and `tune.cjs` can check the demo headless.
-- **Events.** `S.ev` is the event bus: `{k, t, x, y, ...}` for step, jump, land (with v), collect, hurt, stomp, bounce, splash, rustle and so on. The scene derives all one-shot FX, shakes and jiggles from events with their age `GT − e.t`. The templates cap the list at 64.
+- **Events.** `S.ev` is the event bus: `{k, t, x, y, ...}` for step, jump, land (with v), collect, hurt, stomp, bounce, splash, rustle and so on. The scene derives all one-shot FX, shakes and jiggles from events with their age `GT − e.t`; the shell plays their sounds (`audio.md`) and shows the result card on `win` / `gameover`. The templates prune events older than 2 s (cap 256), so a burst of shots keeps all its FX; tools that need every event collect them as they appear (`tune.cjs` does).
+- **Physics probes.** `selfCheck()` in the side template drops the hero onto every surface (standing and running both ways) and walks every plank: a new slope or stacked platform that the hero falls through or snaps off fails `tune.cjs`. Keep it and extend it per mechanic (walls, moving platforms, dash through gaps).
 - **World clock.** `wt = S.wt0 + S.t` keeps the sim's wind identical to the scene's `t`. In attract mode `wt0 = loop·L`; in play mode `wt0` is the wall time at spawn.
 - **Hit-stop.** `S.freeze > 0` holds the hero and camera while world reactions keep integrating.
 - **Attract loop boundary.** All state resets at `loop·L`. Reactions triggered late in the loop (a critter flying off, a gust lean) must finish inside the loop, or they visibly pop at the reset. Check the timeline in `tune.cjs`.
@@ -240,7 +258,10 @@ All run from the project root.
 - `node <skill>/scripts/render.mjs stills 0,1.5,3 --out frames/check [--q "fx=0"]` makes offline stills. Use it for checking beats, crops and sheets.
 - `node <skill>/scripts/render.mjs video --to 14 --fps 30 --jobs 4 --out frames/film.mp4` renders a video only when the user wants one; the live page is the main deliverable.
 - `node <skill>/scripts/qa.mjs` renders every `SCENE.QA()` state and cycle in `?render=1` mode and fails (exit 2) on text outside its container or the screen, overlapping texts, emitters drawn more than `tol` px from where the sim emits, and walk cycles whose lower body doesn't change once frames are aligned on the upper body (a sliding sprite). It writes `frames/qa/<state>.png`, `cycle_<name>.png` (for the motion critic) and `report.json`. Mutation-tested: it catches fixed-size panels with variable text, effects emitted from the actor's ground point, and frozen limbs under a body bob.
-- `node <skill>/scripts/livecheck.mjs --keys "ArrowRight:down@0, Space:press@0.9, Click:960x360@1.2" --shots 1,2 --reload --eval "SCENE.state.x"` plays the game like a user (`Move`/`Click` take view px). Exit 2 means errors or fps < `--minfps` (55).
+- `node <skill>/scripts/livecheck.mjs --keys "ArrowRight:down@0, Space:press@0.9, Click:960x360@1.2" --shots 1,2 --reload --eval "SCENE.state.x"` plays the game like a user (`Move`/`Click` take view px). Exit 2 means errors, fps < `--minfps` (55) or a failed flow.
+  - `--mobile`: a landscape phone (touch, DPR 3, mid tier). Touch script: `Stick:right@0`, `Stick:off@1.5`, `T.jump:press@1.8`, `T.act:down@2 / T.act:up@2.4` (real multi-touch through CDP).
+  - `--flow`: Esc opens the menu and the sim must stop, Esc resumes it, a WebGL context loss must recover with the play state kept.
+  - `--q low|mid|high`, `--cpu 4` (CPU slowed like a phone), `--scale k`. The JSON also reports `quality`, `touch` (overlay shown), `audio` (context state, voices, sounds played).
 - `node live/tune.cjs [path]` prints the attract route events; exit 1 if `SIM.demoCheck` fails, or (without it) not all pickups are collected.
 - `python3 <skill>/scripts/sheet.py out.png frames/check/*.png --crop x0,y0,x1,y1 --cols 6 --label` makes cycle sheets and frame-by-frame checks.
 
@@ -253,3 +274,15 @@ in `performance.md`. In short:
 - Numerous simple sprites go through `G.batch` (one draw call), and through an atlas when they are several names in one layer.
 - The ink pass draws the group n times (default 8) before the group itself, so keep it to what needs the weighted line.
 - If fps drops, measure first (`livecheck.mjs` `perf`, `?perf=1`), then cut what the eye misses least (ambient particles, extra full-screen passes) before touching the look of actors.
+- Quality tiers (`performance.md` §13) already cut passes per device; a scene's own extras honour `Q` too (`L.fx(n)` for counts, `Q.shadows`, `Q.post`).
+
+## 11. The game shell: input, settings and quality, menu, sound, lifecycle
+
+Every game gets these from the engine files, with no game code. Don't re-implement them in the scene or the sim; configure them.
+- **Motion.** The sim steps at a fixed 120 Hz; the shell draws the state between the last two steps (`SIM.LERP` keys), snaps vsync jitter to whole steps and runs at most 8 steps a frame. Movement and camera are even at 60, 90, 120 and 144 Hz; a slow device slows the game down instead of spiralling.
+- **Input** (`input.js`): keyboard, mouse, touch and gamepad into one record (§6). Phones get the controls `SIM.CONTROLS` asks for, plus a ❚❚ menu button; a hidden tab or a lost focus releases every key. When a new action is added to the sim, add its button to `CONTROLS` and its key to the hint.
+- **Options and quality** (`settings.js`): `SET` (saved per game) and `Q` (resolved knobs, read every frame by lib.js and the scene). The sim never reads them.
+- **Menu.** Esc / ❚❚ / pad Start opens Resume, Restart, Quality, Shadows, Music, Sound effects, Screen shake, Touch controls, Fullscreen, Title. The game pauses while it is open and when the tab is hidden. A sim event `{ k: 'win' }` or `{ k: 'gameover', score }` shows a result card with Play again / Title (`SIM.RESULT` words it).
+- **Sound** (`snd.js` + the game's `audio.js`): every sound comes from a sim event; music and SFX switch off from the menu and then cost nothing (`audio.md`).
+- **Lifecycle.** A lost WebGL context (phones in the background) reloads the page with the play state kept; a sim that throws in `step` shows the error and returns to the title instead of freezing; a restored hot-reload state that no longer fits `SIM.create()` (or `SIM.VERSION`) is dropped with a note.
+- **Phone page.** Viewport and safe-area aware, no pinch / double-tap zoom / pull-to-refresh, "turn your phone" for landscape games held upright, fullscreen + orientation lock on the first touch in the packed build.

@@ -4,11 +4,16 @@
 //   sprite(), drop-shadow and ink-outline passes, 2D affine helpers, a two-bone cut-out limb, a HUD glyph atlas, and
 //   the frame pipeline: beginBG → (layers) → godRays → beginComp → (water, play plane, FX) → veil/motes → finish → HUD.
 // Pure function of its inputs: no Math.random, no Date. Query flags: ?fx=0 (no fog/rays), ?only=a,b (draw only those sprites).
+// Quality (window.Q from settings.js, references/performance.md §13): shadows, post (bloom radii), rays, fx (particle and
+// ambient density, L.fx), ink passes. Read every frame, so a tier change applies on the next frame (scale via L.resize).
 (function () {
   const L = (window.LIB = {});
-  const Q = new URLSearchParams(location.search);
-  L.NOFX = Q.get('fx') === '0';
-  L.ONLY = (Q.get('only') || '').split(',').filter(Boolean);
+  const qs = new URLSearchParams(location.search);
+  L.NOFX = qs.get('fx') === '0';
+  L.ONLY = (qs.get('only') || '').split(',').filter(Boolean);
+  const HIGH = { tier: 'high', fx: 1, post: 2, rays: 72, shadows: true, ink: 8 };
+  const QQ = () => window.Q || HIGH;
+  L.fx = (n) => Math.max(n > 0 ? 1 : 0, Math.round(n * QQ().fx));   // scale an effect count (particles, motes, debris) by the tier
 
   // ---------------- shaders (GLSL ES 3.00 bodies; gl.js prepends COMMON: hash, vnoise, fbm, scr) ----------------
   const SPRITE = `
@@ -290,10 +295,11 @@ void main(){ vec3 c = texture(u_src, scr(v_px)).rgb; float l = dot(c, vec3(0.299
   m *= 0.25 + 0.75 * smoothstep(0.38, 0.72, fbm(vec2(ang * 7.0, u_t * 0.04)));
   o = vec4(vec3(m), 1.0); }`;
   const RAYS = `
-uniform sampler2D u_src; uniform vec2 u_sun;
+uniform sampler2D u_src; uniform vec2 u_sun; uniform float u_taps;
 void main(){ vec2 uv = scr(v_px), su = scr(u_sun); vec2 dir = uv - su; float acc = 0.0, dec = 1.0, w = 0.0;
   float j = hash(v_px) * 0.9;
-  for (int i = 0; i < 72; i++){ float f = (float(i) + j) / 72.0; acc += texture(u_src, uv - dir * f * 0.92).r * dec; w += dec; dec *= 0.975; }
+  float dk = pow(0.975, 72.0 / u_taps);              // same falloff along the ray whatever the tap count (quality tier)
+  for (int i = 0; i < 72; i++){ if (float(i) >= u_taps) break; float f = (float(i) + j) / u_taps; acc += texture(u_src, uv - dir * f * 0.92).r * dec; w += dec; dec *= dk; }
   acc /= w;
   float fall = smoothstep(1.4, 0.0, length((v_px - u_sun) / u_res.x));
   o = vec4(vec3(acc * fall), 1.0); }`;
@@ -338,14 +344,22 @@ void main(){ vec2 p = (v_uv - 0.5) * u_sz; vec2 q = abs(p) - (u_sz * 0.5 - u_r);
     W = L.W = w; H = L.H = h; P = L.P = {}; L.PIXEL = Math.max(1, pixel);
     for (const k in SH) P[k.toLowerCase()] = G.program(k.toLowerCase(), SH[k]);
     for (const k in extra) P[k] = G.program(k, extra[k]);
-    // G.SCALE (render scale, index.html) shrinks every target; draws keep using view px, so scenes never see it
-    const px = L.PIXEL, k = px > 1 ? 1 / px : (G.SCALE || 1), lo = { view: [w, h], nearest: px > 1 };
+    L.resize(); L.SUN = [w * 0.31, h * 0.25];
+  };
+  // (re)create the render targets at the current G.SCALE (index.html / settings.js call it after G.resize). Scenes that make
+  // their own targets register a maker: L.onResize.push(() => { T.light = G.target(...) }) — old targets are freed here.
+  L.onResize = [];
+  L.resize = () => {
+    if (!W) return;                                                     // a resize before L.init: init sizes everything
+    for (const k in T) G.free(T[k]);
+    const w = W, h = H, px = L.PIXEL, k = px > 1 ? 1 / px : (G.SCALE || 1), lo = { view: [w, h], nearest: px > 1 };
     const tg = (d, f) => G.target(Math.max(1, Math.round(w * k / d)), Math.max(1, Math.round(h * k / d)), f, { view: [w / d, h / d] });
     T.bg = G.target(Math.round(w * k), Math.round(h * k), true, lo); T.comp = G.target(Math.round(w * k), Math.round(h * k), true, lo);
-    T.mask = tg(2, true); T.rays = tg(2, true);
-    T.b1 = tg(4); T.b2 = tg(4); T.c1 = tg(8); T.c2 = tg(8);
-    L.T = T; L.SUN = [w * 0.31, h * 0.25];
+    T.mask = tg(2); T.rays = tg(2);                     // 0..1 values: RGBA8 is enough (half the bandwidth of half-float)
+    T.b1 = tg(4); T.b2 = tg(4); T.c1 = tg(8); T.c2 = tg(8); T.none = G.target(1, 1);
+    raysOff = false; L.T = T; for (const f of L.onResize) f(T);
   };
+  let raysOff = false;
 
   // ---------------- math ----------------
   // affine 2x3 [a, b, c, d, e, f]: x' = a x + c y + e, y' = b x + d y + f  (y down, angles clockwise on screen)
@@ -365,56 +379,71 @@ void main(){ vec2 p = (v_uv - 0.5) * u_sz; vec2 q = abs(p) - (u_sz * 0.5 - u_r);
   // ---------------- sprite ----------------
   const DEF = { alpha: 1, lod: 0, src: [0, 0, 1, 1], grade: [1, 1, 0, 1], haze: [0.93, 0.88, 0.76], sway: [0, 0, 0, 0], pad: [0, 0], rim: [0, 0, 0, 0],
     rimCol: [1, 0.85, 0.55], tint: [1, 1, 1, 0], fade: [0, 0], vfade: 0, tfade: 0, bulge: [0, 0, 0, 0], bend: [0, 0, 0, 0], lean: [0, 0], disc: 0, bone0: [0, 0, 0, 0], bone1: [0, 0, 0, 0], bone2: [0, 0, 0, 0], wsz: [1, 1] };
+  // hot path without garbage: one reused uniform record (G.draw uploads it at once and skips unchanged values), scratch arrays
+  const DEFK = Object.keys(DEF), UN = {}, un = (k) => UN[k] || (UN[k] = k.startsWith('u_') ? k : 'u_' + k);
+  DEFK.forEach(un);
+  const UNI = {}, PADV = [0, 0], SRCV = [0, 0, 0, 0], FLIP0 = [0, 0], FLIP1 = [1, 0], NOSP = { w: 0, h: 0 }, EMPTY = {};
+  const SH_GRADE = [0, 0, 0, 1], INK_GRADE = [0, 0, 1, 1], ZERO4 = [0, 0, 0, 0], TINT0 = [1, 1, 1, 0];
   L.sp = null;   // pass override: { dx, dy, a, lod } = soft drop shadow, { ..., ink: [r,g,b] } = flat ink silhouette
   // sprite(name, x, y, { w | h, src, pad, flip, rot, pivot, m, u: { uniforms without the u_ prefix } })
   //   x,y = top-left of the visible image. pad grows the quad (fraction of w/h) so deformed pixels are not clipped.
   //   m = rig matrix (M.*): the quad's pivot (px in the drawn image) sits at m's origin; x,y are ignored.
-  L.sprite = (n, x, y, o = {}) => {
-    if (L.ONLY.length && !L.ONLY.includes(n)) return { w: 0, h: 0 };
-    const tx = G.tex(n), src = o.src || [0, 0, 1, 1];
+  L.sprite = (n, x, y, o = EMPTY) => {
+    if (L.ONLY.length && !L.ONLY.includes(n)) return NOSP;
+    const tx = G.tex(n), src = o.src || DEF.src;
     const sw = tx.w * (src[2] - src[0]), sh = tx.h * (src[3] - src[1]);
     let w = o.w, h = o.h; if (w && !h) h = w * sh / sw; if (h && !w) w = h * sw / sh; if (!w) { w = sw; h = sh; }
     const pad = o.pad || 0, pw = w * pad, ph = h * pad;
     // offscreen culling (free for every scene): skip quads fully outside the target; rotation grows the box conservatively
     if (!o.m && !o.noCull) { const r = o.rot ? Math.max(w, h) * 1.5 : 0, sp = L.sp ? 48 : 0;
       if (!G.onScreen(x - pw - r + (L.sp ? L.sp.dx : 0), y - ph - r + (L.sp ? L.sp.dy : 0), w + 2 * pw + 2 * r, h + 2 * ph + 2 * r, 8 + sp)) return { w, h }; }
-    const U = Object.assign({}, DEF, o.u || {}, { u_tex: tx });
-    if (L.sp) { const sp = L.sp;
-      Object.assign(U, { grade: sp.ink ? [0, 0, 1, 1] : [0, 0, 0, 1], haze: sp.ink || U.haze, alpha: sp.a * (U.alpha === undefined ? 1 : U.alpha), lod: sp.lod || 0, rim: [0, 0, 0, 0], tint: [1, 1, 1, 0] });
+    const uni = UNI, ou = o.u;
+    for (let i = 0; i < DEFK.length; i++) uni[UN[DEFK[i]]] = DEF[DEFK[i]];
+    if (ou) for (const k in ou) uni[un(k)] = ou[k];
+    uni.u_tex = tx;
+    if (L.sp) { const sp = L.sp, al = uni.u_alpha;
+      uni.u_grade = sp.ink ? INK_GRADE : SH_GRADE; if (sp.ink) uni.u_haze = sp.ink; uni.u_alpha = sp.a * (al === undefined ? 1 : al);
+      uni.u_lod = sp.lod || 0; uni.u_rim = ZERO4; uni.u_tint = TINT0;
       x += sp.dx; y += sp.dy; if (o.m) o = Object.assign({}, o, { m: M.mul(M.t(sp.dx, sp.dy), o.m) }); }
-    const uni = {}; for (const k in U) uni[k.startsWith('u_') ? k : 'u_' + k] = U[k];
-    uni.u_pad = [pad / (1 + 2 * pad), pad / (1 + 2 * pad)];
+    PADV[0] = PADV[1] = pad / (1 + 2 * pad); uni.u_pad = PADV;
     const at = tx.src;     // atlased texture: the requested rect lives inside the atlas rect
-    uni.u_src = at ? [at[0] + (at[2] - at[0]) * src[0], at[1] + (at[3] - at[1]) * src[1], at[0] + (at[2] - at[0]) * src[2], at[1] + (at[3] - at[1]) * src[3]] : src;
-    const rot = o.rot || 0, piv = o.pivot || [0, 0];
+    if (at) { SRCV[0] = at[0] + (at[2] - at[0]) * src[0]; SRCV[1] = at[1] + (at[3] - at[1]) * src[1];
+      SRCV[2] = at[0] + (at[2] - at[0]) * src[2]; SRCV[3] = at[1] + (at[3] - at[1]) * src[3]; uni.u_src = SRCV; } else uni.u_src = src;
+    const rot = o.rot || 0, piv = o.pivot || FLIP0, fl = o.flip ? FLIP1 : FLIP0;
     if (o.m) { const F = M.mul(o.m, [w + 2 * pw, 0, 0, h + 2 * ph, -pw - piv[0], -ph - piv[1]]);
-      G.draw(P.sprite, uni, [F[0], F[1], 0, F[2], F[3], 0, F[4], F[5], 1], [o.flip ? 1 : 0, 0]); return { w, h }; }
-    G.draw(P.sprite, uni, G.xf(x - pw, y - ph, w + 2 * pw, h + 2 * ph, rot, piv[0] + pw, piv[1] + ph), [o.flip ? 1 : 0, 0]);
+      G.draw(P.sprite, uni, [F[0], F[1], 0, F[2], F[3], 0, F[4], F[5], 1], fl); }
+    else G.draw(P.sprite, uni, G.xf(x - pw, y - ph, w + 2 * pw, h + 2 * ph, rot, piv[0] + pw, piv[1] + ph), fl);
+    if (ou) for (const k in ou) if (!(k in DEF) && !(k.slice(2) in DEF)) delete uni[un(k)];   // extra uniforms don't leak to the next sprite
     return { w, h };
   };
   // rig joint trace for qa.mjs (animation.md §14): while L.TRACE is an object, rigs report screen points per actor instance
   L.TRACE = null;
   L.joint = (id, name, p) => { if (L.TRACE) (L.TRACE[id] = L.TRACE[id] || {})[name] = [p[0], p[1]]; };
   // soft contact shadow of a group of sprites cast onto what is behind (draw it before the group itself)
-  L.dropShadow = (draw, sp = { dx: 16, dy: 30, a: 0.45, lod: 4.5 }) => { L.sp = sp; draw(); L.sp = null; };
-  // one weighted ink silhouette around a whole puppet: n offset flat-ink copies, then the puppet itself
+  // off with the Shadows setting (Q.shadows); contact ellipses (L.shadow) stay — they ground actors and cost one quad
+  const DSH = { dx: 16, dy: 30, a: 0.45, lod: 4.5 };
+  L.dropShadow = (draw, sp = DSH) => { if (!QQ().shadows) return; L.sp = sp; draw(); L.sp = null; };
+  // one weighted ink silhouette around a whole puppet: n offset flat-ink copies (capped by Q.ink), then the puppet itself
   L.inked = (draw, { r = 2.4, n = 8, col = [0.12, 0.08, 0.03], dy = 0.6 } = {}) => {
+    n = Math.min(n, QQ().ink || n);
     for (let i = 0; i < n; i++) { const an = i * 2 * Math.PI / n; L.sp = { dx: Math.cos(an) * r, dy: Math.sin(an) * r + dy, a: 1, lod: 0, ink: col }; draw(); }
     L.sp = null; draw(); };
 
   // ---------------- primitives ----------------
-  L.glow = (x, y, r, col, amt, k = 3.0) => { G.blend('add'); G.draw(P.glow, { u_col: col, u_k: k, u_amt: amt }, G.xf(x - r, y - r, 2 * r, 2 * r)); G.blend(); };
-  L.shadow = (x, y, rx, ry, amt = 0.5) => G.draw(P.shadow, { u_amt: amt }, G.xf(x - rx, y - ry, 2 * rx, 2 * ry));
+  // primitives skip themselves when fully off the bound target (G.onScreen), like L.sprite
+  const off = (x, y, rx, ry) => !G.onScreen(x - rx, y - ry, 2 * rx, 2 * ry);
+  L.glow = (x, y, r, col, amt, k = 3.0) => { if (off(x, y, r, r)) return; G.blend('add'); G.draw(P.glow, { u_col: col, u_k: k, u_amt: amt }, G.xf(x - r, y - r, 2 * r, 2 * r)); G.blend(); };
+  L.shadow = (x, y, rx, ry, amt = 0.5) => off(x, y, rx, ry) ? 0 : G.draw(P.shadow, { u_amt: amt }, G.xf(x - rx, y - ry, 2 * rx, 2 * ry));
   L.solid = (x, y, w, h, col, rot = 0, px = 0, py = 0, a = 1) => G.draw(P.solid, { u_col: col, u_a: a }, G.xf(x, y, w, h, rot, px, py));   // a: opacity (premultiplied)
   L.rrect = (x, y, w, h, r, c0, c1 = c0, a = 1) => G.draw(P.rrect, { u_sz: [w, h], u_r: r, u_a: a, u_c0: c0, u_c1: c1 }, G.xf(x, y, w, h));
-  L.puff = (x, y, r, col, amt, seed) => G.draw(P.puff, { u_col: col, u_amt: amt, u_seed: seed }, G.xf(x - r, y - r, 2 * r, 2 * r));
-  L.star = (x, y, r, col, amt) => { G.blend('add'); G.draw(P.star, { u_col: col, u_amt: amt }, G.xf(x - r, y - r, 2 * r, 2 * r)); G.blend(); };
+  L.puff = (x, y, r, col, amt, seed) => off(x, y, r, r) ? 0 : G.draw(P.puff, { u_col: col, u_amt: amt, u_seed: seed }, G.xf(x - r, y - r, 2 * r, 2 * r));
+  L.star = (x, y, r, col, amt) => { if (off(x, y, r, r)) return; G.blend('add'); G.draw(P.star, { u_col: col, u_amt: amt }, G.xf(x - r, y - r, 2 * r, 2 * r)); G.blend(); };
   // cracks(x, y, R, age, seed, mode): ground impact fissures centred on the impact point (screen px), R = radius on the ground
   // (the quad is 2R × R in a 2:1 view). mode 0 in the ground decal pass (under everything, lit with the ground), mode 1 after
   // the light pass for the magma glow (additive; masked by T.bg = the frame before the light, whose alpha marks sprites).
   // Over its life (age s): tips race out in 0.17 s, glow cools in ~0.4 s, embers to ~2 s, the scar fades at 3–4.6 s.
   L.cracks = (x, y, R, age, seed = 0, mode = 0, amt = 1) => { if (mode) G.blend('add');
-    G.draw(P.crack, { u_seed: seed, u_age: age, u_mode: mode, u_amt: amt, u_mask: T.bg }, G.xf(x - R, y - R / 2, 2 * R, R)); if (mode) G.blend(); };
+    G.draw(P.crack, { u_seed: seed, u_age: age, u_mode: mode, u_amt: amt, u_mask: mode ? T.bg : T.none }, G.xf(x - R, y - R / 2, 2 * R, R)); if (mode) G.blend(); };
   // rain(t, amt 0..1, cam, phase): 'ground' in the ground decal pass (wet ground, puddles), 'fx' after the light pass (splashes,
   // puddle sheen lit by the light map — needs the light target as T.light or o.light), 'sky' for the streaks over everything.
   // t drives the falling streaks and the splashes (uniforms are per program: a draw that omits u_t freezes them)
@@ -423,7 +452,7 @@ void main(){ vec2 p = (v_uv - 0.5) * u_sz; vec2 q = abs(p) - (u_sz * 0.5 - u_r);
     const lt = o.light || T.light; if (!lt) return;
     if (phase === 'fx') { G.blend('add'); G.draw(P.rainfx, { u_t: t, u_amt: amt, u_mode: 0, u_wind: o.wind || 0.12, u_cam: cam, u_mask: T.bg, u_light: lt }, G.xf(0, 0, W, H)); G.blend(); return; }
     G.draw(P.rainfx, { u_t: t, u_amt: amt, u_mode: 1, u_wind: o.wind || 0.12, u_cam: cam, u_mask: T.bg, u_light: lt }, G.xf(0, 0, W, H)); };
-  L.ring = (x, y, rx, ry, col, amt, w = 0.1) => G.draw(P.ring, { u_col: col, u_amt: amt, u_w: w }, G.xf(x - rx, y - ry, 2 * rx, 2 * ry));
+  L.ring = (x, y, rx, ry, col, amt, w = 0.1) => off(x, y, rx, ry) ? 0 : G.draw(P.ring, { u_col: col, u_amt: amt, u_w: w }, G.xf(x - rx, y - ry, 2 * rx, 2 * ry));
   // fbm fog band: p = [scale, speed, threshold, density]; scatters warm light near L.SUN
   L.fog = (y, h, p, col, seed, t, scat = 0.7) => L.NOFX ? 0 :
     G.draw(P.fog, { u_p: p, u_col: col, u_seed: seed, u_sun: L.SUN, u_scat: scat, u_t: t }, G.xf(-40, y, W + 80, h));
@@ -465,7 +494,7 @@ void main(){ vec2 p = (v_uv - 0.5) * u_sz; vec2 q = abs(p) - (u_sz * 0.5 - u_r);
     let r = LBL[slot]; const key = [str, size, col, out, font, weight].join('|'); if (r && r.key === key) return r;
     const cv = document.createElement('canvas'), g = cv.getContext('2d'), f = `${weight} ${size}px ${font}`, pad = Math.ceil(size * 0.3);
     g.font = f; const tw = g.measureText(str).width, w = Math.ceil(tw) + 2 * pad, h = Math.ceil(size * 1.3) + 2 * pad;
-    cv.width = Math.max(1, w); cv.height = h; g.font = f; g.textBaseline = 'middle'; g.lineJoin = 'round';
+    cv.width = Math.max(1, w); cv.height = h; g.font = f; g.textBaseline = 'middle'; g.lineJoin = 'round'; G.dirtyTex();
     g.fillStyle = 'rgba(15,5,8,0.6)'; g.fillText(str, pad, h / 2 + Math.max(2, size * 0.09));
     if (out) { g.lineWidth = Math.max(3, size * 0.16); g.strokeStyle = out; g.strokeText(str, pad, h / 2); }
     g.fillStyle = col; g.fillText(str, pad, h / 2);
@@ -498,10 +527,14 @@ void main(){ vec2 p = (v_uv - 0.5) * u_sz; vec2 q = abs(p) - (u_sz * 0.5 - u_r);
   // ---------------- frame pipeline ----------------
   L.beginBG = (clear = [0.08, 0.1, 0.06, 1]) => { L.qaReset(); G.bind(T.bg, clear); G.blend(); };     // first call of every frame
   // god rays: bright, warm, sky-ish pixels of the background near the sun, radially blurred, screened back onto it
+  // off (Q.rays = 0 or ?fx=0): all three passes skipped; T.rays is cleared once so motes and veil read black
   L.godRays = (t, { sun = L.SUN, amt = 0.42, col = [1.0, 0.80, 0.55] } = {}) => {
+    const taps = QQ().rays;
+    if (!taps || L.NOFX) { if (!raysOff) { G.bind(T.rays, [0, 0, 0, 1]); G.bind(T.bg); raysOff = true; } return; }
+    raysOff = false;
     G.blend('none'); G.bind(T.mask); G.full(P.rmask, { u_t: t, u_src: T.bg, u_sun: [sun[0] / 2, sun[1] / 2] });
-    G.bind(T.rays); G.full(P.rays, { u_src: T.mask, u_sun: [sun[0] / 2, sun[1] / 2] });
-    G.bind(T.bg); G.blend('screen'); if (!L.NOFX) G.full(P.rayadd, { u_src: T.rays, u_amt: amt, u_col: col }); G.blend(); };
+    G.bind(T.rays); G.full(P.rays, { u_src: T.mask, u_sun: [sun[0] / 2, sun[1] / 2], u_taps: taps });
+    G.bind(T.bg); G.blend('screen'); G.full(P.rayadd, { u_src: T.rays, u_amt: amt, u_col: col }); G.blend(); };
   L.beginComp = () => { G.bind(T.comp); G.blend('none'); G.full(P.copy, { u_src: T.bg }); G.blend(); };
   // cartoon water from y to the bottom, reflecting the background; fall = [x, width] churn, gust = [x0, amp0, x1, amp1]
   L.water = (t, { y, sun = L.SUN, fall = [-9999, 1], gust = [-9999, 0, -9999, 0] }) =>
@@ -509,7 +542,7 @@ void main(){ vec2 p = (v_uv - 0.5) * u_sz; vec2 q = abs(p) - (u_sz * 0.5 - u_r);
   L.waterfall = (t, x, y, w, h) => G.draw(P.fall, { u_t: t, u_aspect: h / w }, G.xf(x - w * 0.15, y, w * 1.3, h));
   L.foam = (t, x, y, w, h, amt = 1) => G.draw(P.foam, { u_t: t, u_amt: amt }, G.xf(x, y, w, h));
   // a thin veil of the shafts over the play plane, then dust motes that light up inside the shafts
-  L.veil = (amt = 0.14, col = [1.0, 0.86, 0.6]) => { G.blend('screen'); if (!L.NOFX) G.full(P.rayadd, { u_src: T.rays, u_amt: amt, u_col: col }); G.blend(); };
+  L.veil = (amt = 0.14, col = [1.0, 0.86, 0.6]) => { if (L.NOFX || !QQ().rays) return; G.blend('screen'); G.full(P.rayadd, { u_src: T.rays, u_amt: amt, u_col: col }); G.blend(); };
   // one instanced draw for all motes (performance.md §1, §6)
   const MOTEB = `uniform sampler2D u_rays;
 void main(){ float d = length(v_uv * 2.0 - 1.0); float g = exp(-d * d * 5.0) * smoothstep(1.0, 0.5, d);
@@ -517,19 +550,22 @@ void main(){ float d = length(v_uv * 2.0 - 1.0); float g = exp(-d * d * 5.0) * s
   const moteO = { alpha: 1, tint: null };
   L.motes = (t, { n = 140, amt = 0.35, col = [1.0, 0.92, 0.7], h = 900 } = {}) => { G.blend('add');
     const B = G.batch('motes', 512, MOTEB); B.u.u_rays = T.rays; moteO.alpha = amt; moteO.tint = col;
-    for (let i = 0; i < n; i++) { const h1 = L.rnd(i, 1), h2 = L.rnd(i, 2), h3 = L.rnd(i, 3);
+    n = L.fx(n); for (let i = 0; i < n; i++) { const h1 = L.rnd(i, 1), h2 = L.rnd(i, 2), h3 = L.rnd(i, 3);
       const mx = ((h1 * W + t * (8 + 10 * h3) + 30 * Math.sin(t * 0.5 + i)) % W + W) % W, my = ((h2 * (h - 100) + 40 + 20 * Math.sin(t * 0.7 + i * 1.3)) % h + h) % h, r = 3 + 4 * h3;
       B.add(mx - r, my - r, 2 * r, 2 * r, moteO); }
     B.flush(); G.blend(); };
   // bloom (two radii) + final grade (warm highs, cool lows, hue-keeping roll-off, vignette, dither) → screen, then HUD-ready.
   // warm scales the warm-high/cool-low tint, roll the highlight roll-off (0 = none), dither 0/1. Pixel/flat/neon styles that
   // need exact palette colours: { bloom: [0, 0], warm: 0, roll: 0, dither: 0 }
+  // Q.post: 2 = both bloom radii, 1 = the near radius only, 0 = no bloom passes (the grade, vignette and dither stay)
+  const BLOOM = [0, 0];
   L.finish = (t, { bloom = [0.22, 0.20], vignette = 0.92, warm = 1, roll = 1, dither = 1 } = {}) => {
+    const post = QQ().post; BLOOM[0] = post > 0 ? bloom[0] : 0; BLOOM[1] = post > 1 ? bloom[1] : 0;
     G.blend('none');
-    G.bind(T.b1); G.full(P.bright, { u_src: T.comp });
-    G.bind(T.b2); G.full(P.blur, { u_src: T.b1, u_dir: [1.5, 0] }); G.bind(T.b1); G.full(P.blur, { u_src: T.b2, u_dir: [0, 1.5] });
-    G.bind(T.c1); G.full(P.copy, { u_src: T.b1 });
-    G.bind(T.c2); G.full(P.blur, { u_src: T.c1, u_dir: [2, 0] }); G.bind(T.c1); G.full(P.blur, { u_src: T.c2, u_dir: [0, 2] });
-    G.bind(null); G.full(P.final, { u_src: T.comp, u_bloom: T.b1, u_bloom2: T.c1, u_t: t, u_bloomA: bloom, u_vig: vignette, u_warm: warm, u_roll: roll, u_dither: dither });
+    if (BLOOM[0] || BLOOM[1]) { G.bind(T.b1); G.full(P.bright, { u_src: T.comp });
+      G.bind(T.b2); G.full(P.blur, { u_src: T.b1, u_dir: [1.5, 0] }); G.bind(T.b1); G.full(P.blur, { u_src: T.b2, u_dir: [0, 1.5] }); }
+    if (BLOOM[1]) { G.bind(T.c1); G.full(P.copy, { u_src: T.b1 });
+      G.bind(T.c2); G.full(P.blur, { u_src: T.c1, u_dir: [2, 0] }); G.bind(T.c1); G.full(P.blur, { u_src: T.c2, u_dir: [0, 2] }); }
+    G.bind(null); G.full(P.final, { u_src: T.comp, u_bloom: T.b1, u_bloom2: T.c1, u_t: t, u_bloomA: BLOOM, u_vig: vignette, u_warm: warm, u_roll: roll, u_dither: dither });
     G.blend(); };
 })();

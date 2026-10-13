@@ -21,7 +21,7 @@ This writes `dist/<name>/` (and `dist/<name>.zip` with `--zip`; `--out` changes 
 
 **Verify the build:**
 1. Serve `dist/<name>/game/` statically.
-2. Run `livecheck.mjs --url http://127.0.0.1:<port>/index.html`. Expect 0 errors and a running play state.
+2. Run `livecheck.mjs --url http://127.0.0.1:<port>/index.html --flow` and again with `--mobile --flow`. Expect 0 errors, a running play state, the touch controls on the phone run, and the flow passing (menu pause and resume, context-loss recovery). The packed build keeps no dev keys or overlay; the menu (Esc / ❚❚ / Start) is the player's.
 
 ## Optional outputs (only when asked)
 
@@ -36,7 +36,7 @@ This writes `dist/<name>/` (and `dist/<name>.zip` with `--zip`; `--out` changes 
 ## Hand-back message (short; critic scores only at Gate B and final delivery)
 
 1. The live URL. It is already open, and it reloads by itself.
-2. **What to try:** keys, where to go, and what should react ("run through the tall grass left of the ledge: it parts and springs back; jump on the pad: …").
+2. **What to try:** keys, where to go, and what should react ("run through the tall grass left of the ledge: it parts and springs back; jump on the pad: …"). Say how it plays on a phone too (stick + buttons, the ❚❚ menu, the quality options) when the brief includes phones.
 3. What changed in this iteration, in a few bullets.
 4. The `qa.mjs` result, the latest critic scores (asset, frame and fidelity at Gate A; frame, fidelity, motion and game at Gate B and final), and the known differences. Never hand back a build whose qa fails without saying so.
 5. Next steps you would take, ranked.

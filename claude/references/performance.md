@@ -28,6 +28,7 @@ Rules of thumb:
 10. Animation, particles, physics
 11. Profiling and budgets
 12. study/PERF.md: the per-project plan
+13. Quality tiers, options and the adaptive governor
 
 ---
 
@@ -35,9 +36,12 @@ Rules of thumb:
 
 | Engine feature | Where | Effect |
 |---|---|---|
-| GL state cache (program, VAO) | gl.js `useP`, `useVao` | No redundant `useProgram` / attribute setup per quad |
-| Offscreen culling | `L.sprite` (non-rig quads; `noCull: true` opts out) | Quads outside the target cost nothing on the GPU |
-| Render scale | `G.init(…, { scale })`, index.html | Never renders more pixels than the screen shows; phones cap at 0.75; `?scale=k` |
+| GL state cache (program, VAO, blend, uniforms, bound textures) | gl.js `useP`, `useVao`, `G.blend`, `setU` | No redundant `useProgram`, blend or uniform upload: a default-valued sprite uniform costs nothing after the first draw |
+| Garbage-free sprite path | `L.sprite` (one reused uniform record, scratch arrays) | No per-sprite allocations, so no GC hitches from drawing |
+| Offscreen culling | `L.sprite` (non-rig quads; `noCull: true` opts out), `L.glow/shadow/puff/star/ring` | Quads outside the target cost nothing on the GPU |
+| Render scale | `G.init(…, { scale })`, settings.js | Never renders more pixels than the screen shows; tier cap (mid 0.75, low 0.6); re-fit on resize/rotation; `?scale=k` |
+| Quality tiers + governor | settings.js, `Q` (§13) | Phones drop passes, rays, bloom radii and particles; auto steps down when frames run long |
+| Render interpolation | index.html (`SIM.LERP`) | Smooth motion at any refresh rate without running the sim faster |
 | No `preserveDrawingBuffer` outside `?render=1` | index.html | Avoids a full-frame copy per frame on tile GPUs |
 | Instanced batches | `G.batch(name)` | N quads of one texture = 1 draw call |
 | Atlas lookup | `G.tex(name)` + `live/atlas.js` | Atlased names draw unchanged and can share one batch |
@@ -198,8 +202,8 @@ A 2048² RGBA texture with mips is 21 MB of GPU memory, no matter how small the 
   is a defect like any other.
 - **Worst case, not average:** add a `stress` input script or QA state with the design's maximum (all enemies, full bullet
   pool, every effect on) and read `__perf()` there.
-- **Phones:** `?scale=0.75` (or 0.5) on desktop approximates a phone's fill rate; a 4–6× CPU throttle in Chrome DevTools
-  approximates its CPU. Test the packed build on a real device with `?perf=1` before calling it done.
+- **Phones:** `livecheck.mjs --mobile --cpu 4` emulates a landscape phone (touch, mid tier, render ≤ 0.75) on a 4× slower CPU;
+  `--q low` checks the weak-phone tier. Test the packed build on a real device with `?perf=1` before calling it done.
 - **Budgets (60 fps, mid-range phone):** frame p95 ≤ 16.7 ms; CPU (sim + render) p95 ≤ 8 ms; draws ≤ 250 typical / 400 peak;
   full-screen passes ≤ 10; textures ≤ 150 MB; heap flat during play. A project tightens or loosens these in PERF.md.
 
@@ -213,3 +217,26 @@ Written in Phase 1, right after PLAN.md and before the systems are coded; update
    batch/atlas group; cull rule. One line each, with the reason.
 4. **Render plan:** layers in order, draw calls per layer, full-screen passes, atlases and what's in them, texture MB.
 5. **Measured:** the last `__perf()` at the gates (normal play and the stress case), and on a device when tested.
+
+## 13. Quality tiers, options and the adaptive governor (settings.js)
+
+One game, three costs. `window.Q` is resolved from the player's options and the device, and lib.js reads it every frame:
+
+| Tier | Who | Render scale cap | `fx` (particles, motes) | `post` (bloom radii) | `rays` (taps) | ink passes | fbm octaves | drop shadows |
+|---|---|---|---|---|---|---|---|---|
+| high | desktop | 1 | 1 | 2 | 72 | 8 | 5 | on |
+| mid | phones, tablets | 0.75 | 0.7 | 1 | 36 | 6 | 4 | on |
+| low | weak phones (≤ 4 cores or ≤ 3 GB) | 0.6 | 0.4 | 0 | off | 4 | 3 | off (Auto) |
+
+- **Auto** (default): the device guess above, then the **governor**. After a 3 s warm-up, every 2 s it reads the frame p95; two
+  windows over 20 ms step one tier down, remembered for this device (a steady 30 Hz cap is recognised and left alone). It
+  never steps up during a session, so the look doesn't pump. Off while paused, hidden or under automation (`?gov=1` forces it).
+- **The player's options** (menu, saved per game): Quality Auto/High/Medium/Low, Shadows Auto/On/Off, Music, Sound effects,
+  Screen shake (off by default with `prefers-reduced-motion`), Touch controls Auto/On/Off.
+- **What honours what:** `L.dropShadow` → `Q.shadows` (contact ellipses stay: they ground actors); `L.finish` → `Q.post`;
+  `L.godRays` / `L.veil` → `Q.rays` (off = no passes at all); `L.motes` and the scene's own counts → `L.fx(n)`;
+  `L.inked` → `Q.ink`; every fbm (fog, water, sprite fades) → octaves; shake → `Q.shake`. A scene that adds its own
+  expensive extra (a reflection pass, a second particle layer) gates it on `Q` the same way, and says so in PERF.md.
+- **Never in the sim.** Gameplay is identical on every tier; only what is drawn changes. Renders and QA always run high.
+- **Check every tier at Gate B:** `livecheck.mjs --q low` and `--mobile` must stay readable (the low tier loses glow, not
+  information: no gameplay cue may live only in bloom, rays or particles).

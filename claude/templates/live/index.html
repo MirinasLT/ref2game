@@ -1,35 +1,43 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><title>live</title>
+<html lang="en"><head><meta charset="utf-8"><title>live</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#000">
 <style>
 :root{--ar:1.7778}
-html,body{margin:0;background:#000;height:100%;overflow:hidden}
+html,body{margin:0;background:#000;height:100%;overflow:hidden;overscroll-behavior:none;touch-action:none;-webkit-user-select:none;user-select:none;
+  -webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
 canvas{display:block;width:min(100vw,calc(100vh*var(--ar)));height:auto;aspect-ratio:var(--ar);margin:auto;position:absolute;inset:0}
-#hint{pointer-events:none;position:absolute;left:0;right:0;bottom:3vh;text-align:center;font:600 18px -apple-system,sans-serif;color:#fff;text-shadow:0 2px 6px #000;transition:opacity .4s}
-#dev{position:absolute;left:10px;bottom:8px;font:12px ui-monospace,Menlo,monospace;color:#fff;background:#0008;padding:5px 8px;border-radius:6px;opacity:.55;white-space:pre}
+@supports (height:100dvh){canvas{width:min(100vw,calc(100dvh*var(--ar)))}}
+#hint{pointer-events:none;position:absolute;left:0;right:0;bottom:calc(3vh + env(safe-area-inset-bottom));text-align:center;font:600 clamp(14px,2.2vw,18px) system-ui,-apple-system,sans-serif;
+  color:#fff;text-shadow:0 2px 6px #000;transition:opacity .4s;z-index:5}
+#dev{position:absolute;left:10px;bottom:8px;font:12px ui-monospace,Menlo,monospace;color:#fff;background:#0008;padding:5px 8px;border-radius:6px;opacity:.55;white-space:pre;z-index:15}
 #dev:hover{opacity:1}
-#flash{position:absolute;right:12px;bottom:10px;font:600 13px -apple-system,sans-serif;color:#9f9;background:#000a;padding:4px 10px;border-radius:6px;opacity:0;transition:opacity .6s}
+#flash{position:absolute;right:12px;bottom:10px;font:600 13px system-ui,sans-serif;color:#9f9;background:#000a;padding:4px 10px;border-radius:6px;opacity:0;transition:opacity .6s;z-index:15}
+#rotate{display:none;position:absolute;inset:0;z-index:30;background:#000e;color:#fff;font:600 20px system-ui,sans-serif;align-items:center;justify-content:center;text-align:center;padding:24px}
+@media (orientation: portrait) and (pointer: coarse){ body.land #rotate{display:flex} }
 </style>
 </head><body><canvas id="c"></canvas>
-<div id="hint">press any key or click to play — arrows / WASD move, Space jump, X action, R restart</div>
-<div id="dev"></div><div id="flash">reloaded</div>
+<div id="hint">press any key or click to play</div>
+<div id="dev"></div><div id="flash">reloaded</div><div id="rotate">↻ Turn your phone sideways to play</div>
 <script>
-// LIVE PREVIEW. Scripts and images load with a cache-buster; the page polls its sources and reloads itself when any of
-// them changes, keeping the play state (sessionStorage). Attract demo until a key or click, then play (keyboard + pointer).
-// Dev keys: P pause, [ ] speed (0.1 / 0.25 / 0.5 / 1), . single step, Esc back to the demo, R restart.
-// ?render=1 exposes window.__renderAt(t) for render.mjs (no loop, no polling).
-const V = Date.now(), STATIC = !!window.__STATIC__;          // STATIC: packed build (no polling, no dev overlay)
+// LIVE PREVIEW + GAME SHELL. Scripts and images load with a cache-buster; the page polls its sources and reloads itself when any
+// of them changes, keeping the play state (sessionStorage; dropped when the sim's state shape changed). Attract demo until any
+// input, then play. Input: input.js (keyboard, touch stick + buttons, gamepad). Options and quality: settings.js (Esc / ❚❚ / Start
+// opens the menu). Sound: snd.js + the game's audio.js, driven by sim events. Sim events { k: 'win' | 'gameover' } show a result card.
+// Motion: fixed 120 Hz sim steps, the frame drawn between the last two steps (render interpolation of SIM.LERP keys), so movement
+// is even at 60 / 90 / 120 / 144 Hz. Dev keys (live page only): P pause, [ ] speed, . single step, F perf overlay.
+// ?render=1 exposes window.__renderAt(t) for render.mjs (no loop, no polling); ?perf=1 shows the perf overlay; ?q=low|mid|high.
+const V = Date.now(), STATIC = !!window.__STATIC__;          // STATIC: packed build (no polling, no dev keys, no dev overlay)
 const load = (src) => new Promise((res, rej) => { const s = document.createElement('script'); s.src = src + '?v=' + V; s.onload = res; s.onerror = () => rej(new Error('failed ' + src)); document.head.appendChild(s); });
+const SRC = ['assets.js', 'sizes.js', 'atlas.js', 'settings.js', 'gl.js', 'lib.js', 'input.js', 'snd.js', 'sim.js', 'scene.js', 'audio.js'];
 (async () => {
-  // sizes.js: window.SIZES (display size per sprite in view px, engine.md §7); audio.js: sound from the event bus (stub until used)
-  // atlas.js: window.ATLAS from scripts/atlas.py (packed names load as one sheet; stub until a project packs one)
-  for (const f of ['assets.js', 'sizes.js', 'atlas.js', 'gl.js', 'lib.js', 'sim.js', 'scene.js', 'audio.js']) await load(f);
+  // sizes.js: window.SIZES (display size per sprite, engine.md §7); atlas.js: window.ATLAS (scripts/atlas.py); audio.js: window.SOUND
+  for (const f of SRC) await load(f);
   const q = new URLSearchParams(location.search), render = q.has('render');
   const VW = (SIM.VIEW || {}).W || 1920, VH = (SIM.VIEW || {}).H || 1080;             // view size and aspect come from the sim
-  document.documentElement.style.setProperty('--ar', VW / VH); if (SIM.HINT) document.getElementById('hint').textContent = SIM.HINT;
-  // render scale: never more pixels than the screen shows; phones (coarse pointer) cap at 0.75. ?scale=k overrides; renders stay 1.
+  document.documentElement.style.setProperty('--ar', VW / VH); document.body.classList.toggle('land', VW > VH);
   const cvs = document.getElementById('c'), shown = cvs.getBoundingClientRect().width * devicePixelRatio / VW;
-  const scale = render ? 1 : +(q.get('scale') || Math.max(0.5, Math.min(1, shown || 1, matchMedia('(pointer: coarse)').matches ? 0.75 : 1)));
-  G.init(cvs, VW, VH, { scale, preserve: render });
+  G.init(cvs, VW, VH, { scale: SETTINGS.scaleFor(shown), preserve: render, oct: Q.oct });
   const rep = new Set(SCENE.REPEAT || []), near = (n) => SCENE.NEAREST === true || (SCENE.NEAREST || []).includes(n);   // NEAREST: true = all
   const AT = window.ATLAS || {}, sheets = [...new Set(Object.values(AT).map((a) => a[0]))];
   await Promise.all([...Object.keys(ASSETS).filter((n) => !AT[n]), ...sheets]
@@ -40,71 +48,116 @@ const load = (src) => new Promise((res, rej) => { const s = document.createEleme
   window.__ready = true;
   if (render) return;
 
-  const keys = {}, hint = document.getElementById('hint'), dev = document.getElementById('dev'), flash = document.getElementById('flash');
+  const hint = document.getElementById('hint'), dev = document.getElementById('dev'), flash = document.getElementById('flash');
+  const touchy = matchMedia('(pointer: coarse)').matches;
+  hint.textContent = touchy ? (SIM.HINT_TOUCH || 'Tap to play') : (SIM.HINT || 'Press any key or click to play: arrows / WASD move, Space jump, X action, Esc menu');
   const SPEEDS = [0.1, 0.25, 0.5, 1];
-  let play = null, acc = 0, simT = 0, speed = 1, paused = false, stepOnce = false, fps = 60;
+  let play = null, acc = 0, simT = 0, speed = 1, devPause = false, menuPause = false, stepOnce = false, fps = 60, evT = -1, lost = false, perfOn = q.has('perf');
+  const paused = () => devPause || menuPause || lost;
+  // a restored play state must fit the current sim: same SIM.VERSION, every key of create(), same length for fixed arrays
+  const fits = (sv) => { const c = SIM.create(); for (const k in c) { if (!(k in sv)) return false;
+    if (Array.isArray(c[k]) && c[k].length && (!Array.isArray(sv[k]) || sv[k].length !== c[k].length)) return false; } return true; };
   try { const sv = JSON.parse(sessionStorage.getItem('live') || 'null');                     // restore across live reloads
-    if (sv) { simT = sv.simT; speed = sv.speed; paused = sv.paused; if (sv.play) { play = Object.assign(SIM.create(), sv.play); hint.style.opacity = 0; }
-      flash.style.opacity = 1; setTimeout(() => (flash.style.opacity = 0), 1200); } } catch (e) {}
-  const save = () => { try { sessionStorage.setItem('live', JSON.stringify({ simT, speed, paused, play })); } catch (e) {} };
+    if (sv) { simT = sv.simT; speed = sv.speed; devPause = !!sv.paused && !STATIC;
+      if (sv.play && (sv.ver ?? null) === (SIM.VERSION ?? null) && fits(sv.play)) { play = Object.assign(SIM.create(), sv.play); evT = play.t; hint.style.opacity = 0; }
+      flash.textContent = sv.play && !play ? 'reloaded (sim changed: new run)' : 'reloaded';
+      if (!STATIC) { flash.style.opacity = 1; setTimeout(() => (flash.style.opacity = 0), 1400); } } } catch (e) { console.warn('restore', e); }
+  const save = () => { try { sessionStorage.setItem('live', JSON.stringify({ simT, speed, paused: devPause, play, ver: SIM.VERSION ?? null })); } catch (e) {} };
+  let wantFs = false;                                                   // fullscreen waits for the activating pointerup
+  const begin = () => { if (play || SETTINGS.open) return; play = SIM.spawn(simT); evT = -1; hint.style.opacity = 0; INPUT.clear();
+    wantFs = touchy && STATIC && SIM.FULLSCREEN !== false && !document.fullscreenElement; };
+  const toTitle = () => { play = null; SCENE.state = null; hint.style.opacity = 1; };
+  INPUT.init(cvs, VW, VH); INPUT.onStart = begin;
+  INPUT.onGesture = () => { if (wantFs) { wantFs = false; SETTINGS.fullscreen(true); } };
+  Object.assign(SETTINGS.on, { pause: (on) => { menuPause = on; }, restart: () => { play = SIM.spawn(simT); evT = -1; hint.style.opacity = 0; INPUT.clear(); }, title: toTitle });
   addEventListener('keydown', (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
     const c = e.code;
-    if (c === 'KeyP') { paused = !paused; e.preventDefault(); return; }
-    if (c === 'KeyF' && !STATIC) { perfOn = !perfOn; return; }                              // perf overlay (packed build: ?perf=1)
-    if (c === 'Period') { stepOnce = true; paused = true; e.preventDefault(); return; }
-    if (c === 'BracketLeft') { speed = SPEEDS[Math.max(0, SPEEDS.indexOf(speed) - 1)]; return; }
-    if (c === 'BracketRight') { speed = SPEEDS[Math.min(SPEEDS.length - 1, SPEEDS.indexOf(speed) + 1)]; return; }
-    if (c === 'Escape') { play = null; SCENE.state = null; hint.style.opacity = 1; return; }
-    keys[c] = 1;
-    const dg = /^Digit(\d)$/.exec(c); if (dg) pend.slot = +dg[1] || 10;                     // 1–9, 0 → inp.slot (hotbars)
-    if (!play || c === 'KeyR') { play = SIM.spawn(simT); hint.style.opacity = 0; }
-    e.preventDefault();
+    if (!STATIC) {
+      if (c === 'KeyP') { devPause = !devPause; return; }
+      if (c === 'KeyF') { perfOn = !perfOn; return; }
+      if (c === 'Period') { stepOnce = true; devPause = true; return; }
+      if (c === 'BracketLeft') { speed = SPEEDS[Math.max(0, SPEEDS.indexOf(speed) - 1)]; return; }
+      if (c === 'BracketRight') { speed = SPEEDS[Math.min(SPEEDS.length - 1, SPEEDS.indexOf(speed) + 1)]; return; }
+    }
+    if (c === 'Escape') { if (play) SETTINGS.openMenu(); return; }
+    if (c === 'KeyR' && play) { SETTINGS.on.restart(); return; }
+    if (c === 'Tab' || /^F\d+$/.test(c)) return;
+    SND.unlock(); begin();
   });
-  addEventListener('keyup', (e) => { keys[e.code] = 0; });
-  // pointer in view pixels (VW×VH); click is true for exactly one sim step
-  const cv = document.getElementById('c'), ptr = { x: VW / 2, y: VH / 2, down: 0, click: 0 }, pend = { slot: 0, wheel: 0 };
-  addEventListener('wheel', (e) => { if (play) { pend.wheel = Math.sign(e.deltaY); e.preventDefault(); } }, { passive: false });
-  addEventListener('contextmenu', (e) => e.preventDefault());
-  const toView = (e) => { const r = cv.getBoundingClientRect(); ptr.x = (e.clientX - r.left) / r.width * VW; ptr.y = (e.clientY - r.top) / r.height * VH; };
-  addEventListener('pointermove', toView);
-  addEventListener('pointerdown', (e) => { toView(e); ptr.down = 1; ptr.click = 1; if (!play) { play = SIM.spawn(simT); hint.style.opacity = 0; } });
-  addEventListener('pointerup', () => { ptr.down = 0; });
-  let last = performance.now(), fpsAcc = 0, fpsN = 0;
-  // profiling (references/performance.md §11): frame interval and CPU time (sim + render submit) over the last 240 frames,
-  // draw calls / program switches / instanced quads per frame, JS heap, texture memory. ?perf=1 or F shows it; __perf() returns it.
+  // a hidden tab pauses the game (menu up on return); a lost GL context (phones evict it in the background) reloads the page
+  // with the play state kept, the only reliable way to rebuild every texture, program and target
+  document.addEventListener('visibilitychange', () => { if (document.hidden && play && !SETTINGS.open) SETTINGS.openMenu(); last = -1; });
+  cvs.addEventListener('webglcontextlost', (e) => { e.preventDefault(); lost = true; save();
+    setTimeout(() => lost && location.reload(), 3000); });                // some browsers (iOS) never send contextrestored
+  cvs.addEventListener('webglcontextrestored', () => location.reload());
+
+  // render interpolation: SCENE.state is a view of play between the previous and the current step (alpha = acc / DT)
+  const LERP = SIM.LERP || ['x', 'y', 'cam', 't'], prev = {}, view = {}, inp = {};
+  let lastPlay = null;
+  const tmp = {}, near400 = (a, b) => Math.abs(b - a) < 400;                         // larger jumps are teleports: no blend
+  const snap = () => { for (const k of LERP) { const v = play[k];
+    if (Array.isArray(v)) { const p = Array.isArray(prev[k]) ? prev[k] : (prev[k] = []); p.length = v.length; for (let i = 0; i < v.length; i++) p[i] = v[i]; }
+    else prev[k] = v; } };
+  const viewOf = (al) => { for (const k in view) if (!(k in play)) delete view[k]; for (const k in play) view[k] = play[k];
+    for (const k of LERP) { const a = prev[k], b = play[k];
+      if (typeof a === 'number' && typeof b === 'number') { if (near400(a, b)) view[k] = a + (b - a) * al; }
+      else if (Array.isArray(a) && Array.isArray(b) && a.length === b.length) { const o = tmp[k] || (tmp[k] = []);
+        for (let i = 0; i < b.length; i++) o[i] = near400(a[i], b[i]) ? a[i] + (b[i] - a[i]) * al : b[i]; view[k] = o; } }
+    return view; };
+  const RESULT = { win: 'Level complete', gameover: 'Game over' };
+  const events = () => { for (const e of play.ev) { if (e.t <= evT) continue;
+      SND.ev(e, Array.isArray(play.cam) ? play.cam[0] : typeof play.cam === 'number' ? play.cam : 0);
+      if (RESULT[e.k]) SETTINGS.result(SIM.RESULT ? SIM.RESULT(e, play) : { title: RESULT[e.k], lines: e.score !== undefined ? ['Score ' + e.score] : [] }); }
+    evT = play.t; };
+  const crash = (err) => { console.error(err); if (!STATIC) { flash.textContent = 'sim error: ' + err.message + ' (fix sim.js, the page reloads)'; flash.style.color = '#f88'; flash.style.opacity = 1; } toTitle(); };
+
+  // profiling (references/performance.md §11): raw frame interval and CPU time (sim + render submit) over the last 240 frames,
+  // draw calls / program switches / instanced quads, JS heap, texture memory, quality tier. ?perf=1 or F shows it; __perf() returns it.
   const PN = 240, pf = { frame: new Float32Array(PN), cpu: new Float32Array(PN), i: 0, n: 0 };
-  let perfOn = q.has('perf');
   const pct = (a, n, k) => { const s = Array.from(a.subarray(0, n)).sort((x, y) => x - y); return s[Math.min(n - 1, Math.floor(n * k))] || 0; };
-  window.__perf = () => { const n = pf.n, g = G.last || G.stats, mem = performance.memory;
+  window.__perf = () => { const n = pf.n, g = G.last, mem = performance.memory;
     let tex = 0; for (const n2 of [...Object.keys(ASSETS).filter((x) => !AT[x]), ...sheets]) { try { const t = G.tex(n2); tex += t.w * t.h * 4 * (near(n2) ? 1 : 1.34); } catch (e) {} }
     return { fps: +fps.toFixed(1), frameP50: +pct(pf.frame, n, 0.5).toFixed(2), frameP95: +pct(pf.frame, n, 0.95).toFixed(2),
       cpuP50: +pct(pf.cpu, n, 0.5).toFixed(2), cpuP95: +pct(pf.cpu, n, 0.95).toFixed(2), draws: g.draws, progs: g.progs, inst: g.inst,
-      scale: G.SCALE, texMB: +(tex / 1048576).toFixed(1), heapMB: mem ? +(mem.usedJSHeapSize / 1048576).toFixed(1) : null }; };
-  const loop = () => {
-    const now = performance.now(), wall = Math.min(0.1, (now - last) / 1000); last = now;
-    pf.frame[pf.i] = wall * 1000;
+      scale: G.SCALE, tier: Q.tier, texMB: +(tex / 1048576).toFixed(1), heapMB: mem ? +(mem.usedJSHeapSize / 1048576).toFixed(1) : null, audio: SND.stats() }; };
+  let last = -1, fpsAcc = 0, fpsN = 0;
+  const loop = (ts) => {
+    requestAnimationFrame(loop);
+    if (lost) return;
+    const t0 = performance.now(), raw = last < 0 ? 1000 / 60 : ts - last; last = ts;
+    let wall = Math.min(0.1, raw / 1000); const qz = Math.round(wall * 120) / 120; if (qz > 0 && Math.abs(wall - qz) < 0.0012) wall = qz;   // vsync jitter → whole steps
+    pf.frame[pf.i] = raw;
     fpsAcc += wall; fpsN++; if (fpsAcc > 0.5) { fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; }
-    const dt = paused ? (stepOnce ? 1 / 60 : 0) : wall * speed; stepOnce = false;
+    const dt = paused() ? (stepOnce ? SIM.DT : 0) : wall * speed; stepOnce = false;
     simT += dt;
     if (play) {
-      acc += dt;
-      const inp = { left: keys.ArrowLeft || keys.KeyA, right: keys.ArrowRight || keys.KeyD, up: keys.ArrowUp || keys.KeyW, down: keys.ArrowDown || keys.KeyS,
-        jump: keys.Space, act: keys.KeyX || keys.KeyJ || keys.Enter, px: ptr.x, py: ptr.y, press: ptr.down, click: ptr.click, slot: pend.slot, wheel: pend.wheel };
-      while (acc >= SIM.DT) { SIM.step(play, inp); inp.click = ptr.click = 0; inp.slot = pend.slot = 0; inp.wheel = pend.wheel = 0; acc -= SIM.DT; }
-      if (SIM.outOfPlay && SIM.outOfPlay(play)) play = SIM.respawn ? SIM.respawn(play, simT) : SIM.spawn(simT);
-      SCENE.state = play;
+      if (play !== lastPlay) { snap(); lastPlay = play; }
+      acc += dt; INPUT.read(inp);
+      let n = 0;
+      while (acc >= SIM.DT - 1e-9 && play) {                     // at most 8 steps a frame: a slow device slows down, never spirals
+        snap();
+        try { SIM.step(play, inp); } catch (err) { crash(err); break; }
+        INPUT.consume(inp); acc -= SIM.DT;
+        if (++n >= 8) { acc = 0; break; }
+      }
+      if (play) {
+        events();
+        if (SIM.outOfPlay && SIM.outOfPlay(play)) { play = SIM.respawn ? SIM.respawn(play, simT) : SIM.spawn(simT); evT = -1; snap(); lastPlay = play; }
+        SCENE.state = viewOf(Math.max(0, Math.min(1, acc / SIM.DT)));
+      }
     } else SCENE.state = null;
     try { SCENE.render(simT); } catch (e) { if (!window.__renderErr) { window.__renderErr = e; console.error(e); } }   // log once, keep the loop alive
-    pf.cpu[pf.i] = performance.now() - now; pf.i = (pf.i + 1) % PN; pf.n = Math.min(PN, pf.n + 1); G.frame();
-    dev.style.display = (perfOn || (!STATIC && (paused || speed !== 1 || q.has('dev')))) ? 'block' : 'none';   // debug line only when paused / slowed, ?dev or perf
-    if (perfOn && pf.i % 15 === 0) { const r = __perf(); dev.textContent = `${r.fps} fps  frame ${r.frameP50}/${r.frameP95} ms (p50/p95)  cpu ${r.cpuP50}/${r.cpuP95} ms\n` +
-      `draws ${r.draws}  programs ${r.progs}  instanced ${r.inst}  scale ${r.scale}  tex ${r.texMB} MB  heap ${r.heapMB ?? '?'} MB`; }
-    else if (!perfOn && !STATIC) dev.textContent = `LIVE  ${play ? 'play' : 'demo'}  ${paused ? 'PAUSED' : speed + '×'}  ${fps.toFixed(0)} fps   P pause  [ ] speed  . step  Esc demo  R restart  F perf`;
-    requestAnimationFrame(loop);
+    pf.cpu[pf.i] = performance.now() - t0; pf.i = (pf.i + 1) % PN; pf.n = Math.min(PN, pf.n + 1); G.frame();
+    SETTINGS.watch(raw, !paused());
+    dev.style.display = (perfOn || (!STATIC && (devPause || speed !== 1 || q.has('dev')))) ? 'block' : 'none';   // debug line only when paused / slowed, ?dev or perf
+    if (perfOn && pf.i % 15 === 0) { const r = __perf(); dev.textContent = `${r.fps} fps  frame ${r.frameP50}/${r.frameP95} ms (p50/p95)  cpu ${r.cpuP50}/${r.cpuP95} ms  ${r.tier} ×${r.scale}\n` +
+      `draws ${r.draws}  programs ${r.progs}  instanced ${r.inst}  tex ${r.texMB} MB  heap ${r.heapMB ?? '?'} MB  audio ${r.audio.state} ${r.audio.voices}v`; }
+    else if (!perfOn && !STATIC) dev.textContent = `LIVE  ${play ? 'play' : 'demo'}  ${devPause ? 'PAUSED' : speed + '×'}  ${fps.toFixed(0)} fps   P pause  [ ] speed  . step  Esc menu  R restart  F perf`;
   };
-  loop();
+  requestAnimationFrame(loop);
   if (STATIC) { dev.style.display = 'none'; return; }
-  const WATCH = ['index.html', 'scene.js', 'sim.js', 'lib.js', 'gl.js', 'assets.js', 'sizes.js', 'audio.js'], stamp = {};
+  const WATCH = ['index.html', ...SRC], stamp = {};
   const poll = async () => {
     for (const f of WATCH) {
       try { const r = await fetch(f + '?poll=' + Date.now(), { method: 'HEAD', cache: 'no-store' }); const m = r.headers.get('last-modified') + r.headers.get('content-length');
@@ -113,8 +166,10 @@ const load = (src) => new Promise((res, rej) => { const s = document.createEleme
     setTimeout(poll, 700);
   };
   poll();
-})().catch((e) => { console.error(e); document.body.insertAdjacentHTML('beforeend', '<pre style="color:#f88;position:absolute;top:0;left:0;background:#000c;padding:12px;font:13px monospace;white-space:pre-wrap">' + e.stack + '</pre>');
-  const f = ['scene.js', 'sim.js', 'lib.js', 'gl.js', 'assets.js', 'index.html'], st = {};               // keep polling: fixing the error reloads by itself
+})().catch((e) => { console.error(e); document.body.insertAdjacentHTML('beforeend', '<pre style="color:#f88;position:absolute;top:0;left:0;background:#000c;padding:12px;font:13px monospace;white-space:pre-wrap;z-index:40"></pre>');
+  document.body.lastChild.textContent = e.stack;
+  if (window.__STATIC__) return;
+  const f = ['index.html', ...SRC], st = {};               // keep polling: fixing the error reloads by itself
   setInterval(async () => { for (const x of f) { try { const r = await fetch(x + '?p=' + Date.now(), { method: 'HEAD', cache: 'no-store' }); const m = r.headers.get('last-modified');
     if (st[x] && st[x] !== m) location.reload(); st[x] = m; } catch (e) {} } }, 800); });
 </script></body></html>

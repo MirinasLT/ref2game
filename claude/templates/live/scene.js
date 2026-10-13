@@ -19,7 +19,8 @@
     const ST = S.state || SIM.at(t), GT = ST.t, SS = L.SS, rnd = L.rnd;
     let shk = 0; for (const e of ST.ev) { const a = GT - e.t; if (a < 0) continue;           // screen shake from events, quadratic decay
       const A0 = e.k === 'land' && (e.v || 0) > 1300 ? 4 : 0; if (A0 && a < 0.28) shk = Math.max(shk, A0 * (1 - a / 0.28) ** 2); }
-    const camX = ST.cam + shk * Math.sin(GT * 91), camY = 3 * Math.sin(2 * Math.PI * t / 7.3) + shk * Math.sin(GT * 117 + 1.3);
+    shk *= window.Q ? Q.shake : 1;                                                             // Screen shake setting (settings.js)
+    const camX = ST.cam + shk * Math.sin(GT * 91), camY = (ST.camY || 0) + 3 * Math.sin(2 * Math.PI * t / 7.3) + shk * Math.sin(GT * 117 + 1.3);
     const X = (f) => -camX * f, Y = (f) => -camY * f;                                       // parallax offset for depth factor f
     const gw = (x) => SIM.gustAt(t, x), wnd = (x) => SIM.windAt(t, x);
 
@@ -95,12 +96,12 @@
 
     // --- event FX: dust, grass bits, pickup bursts ---
     for (const e of ST.ev) { const a = GT - e.t; if (a < 0) continue; const ex = e.x + X(1), ey = e.y + Y(1);
-      if (e.k === 'step' && a < 0.4) for (let j = 0; j < 2; j++) { const q = a / 0.4, s = rnd(e.t, j);
+      if (e.k === 'step' && a < 0.4) for (let j = 0, n = L.fx(2); j < n; j++) { const q = a / 0.4, s = rnd(e.t, j);
         L.puff(ex - ST.face * (8 + 30 * q * (0.6 + s)), ey - 6 - 14 * q, 7 + 10 * q, DUST, 0.45 * (1 - q), e.t * 10 + j); }
-      if ((e.k === 'land' || e.k === 'jump') && a < 0.55) { const n = e.k === 'land' ? 8 : 4, pw = e.k === 'land' ? Math.min(1.3, Math.max(0.6, (e.v || 900) / 1100)) : 0.7;
+      if ((e.k === 'land' || e.k === 'jump') && a < 0.55) { const n = L.fx(e.k === 'land' ? 8 : 4), pw = e.k === 'land' ? Math.min(1.3, Math.max(0.6, (e.v || 900) / 1100)) : 0.7;
         for (let j = 0; j < n; j++) { const q = a / 0.55, side = j % 2 ? 1 : -1, s = rnd(e.t, j);
           L.puff(ex + side * (14 + 70 * pw * (1 - (1 - q) ** 2) * (0.5 + s)), ey - 4 - 22 * q * s, (8 + 16 * q) * pw, DUST, 0.55 * (1 - q) ** 1.3, e.t + j); } }
-      if (e.k === 'rustle' && a < 0.7) for (let j = 0; j < 4; j++) { const q = a / 0.7, s = rnd(e.t, j + 3);
+      if (e.k === 'rustle' && a < 0.7) for (let j = 0, n = L.fx(4); j < n; j++) { const q = a / 0.7, s = rnd(e.t, j + 3);
         L.puff(ex + e.d * (60 + 120 * s) * a + (j - 1.5) * 10, ey - (180 + 160 * s) * a + 520 * a * a, 4, [0.5, 0.8, 0.3], 0.9 * (1 - q), j); }
       if (e.k === 'collect' && a < 0.6) { const q = a / 0.6;
         for (let j = 0; j < 8; j++) { const an = j * Math.PI / 4 + e.t, d = 18 + 60 * (1 - (1 - q) ** 2); L.star(ex + Math.cos(an) * d, ey + Math.sin(an) * d, 11, [1.0, 0.9, 0.45], 1 - q); }

@@ -16,7 +16,7 @@ ap = argparse.ArgumentParser(); ap.add_argument('--name', default=os.path.basena
 a = ap.parse_args()
 root = os.path.join(a.out, a.name); game = os.path.join(root, 'game'); assets = os.path.join(root, 'assets')
 shutil.rmtree(root, ignore_errors=True); os.makedirs(os.path.join(game, 'assets')); os.makedirs(os.path.join(assets, 'textures')); os.makedirs(os.path.join(assets, 'source'))
-manifest = json.loads(re.sub(r'^window\.ASSETS = |;\s*$', '', open('live/assets.js').read().strip()))
+manifest = json.loads(re.sub(r'^window\.ASSETS = |;\s*$', '', open('live/assets.js', encoding='utf-8').read().strip()))
 try:                                                        # view size and controls hint come from the sim (node is a setup dependency)
     sim = json.loads(subprocess.run(['node', '-e', "const S = require(require('path').resolve('live/sim.js')); "
                                      "console.log(JSON.stringify({ view: S.VIEW || null, hint: S.HINT || null }))"],
@@ -29,8 +29,8 @@ for f in sorted(os.listdir('live')):
     if f.endswith('.js'): shutil.copy(os.path.join('live', f), game)
 for d in ['fonts', 'audio']:
     if os.path.isdir(os.path.join('live', d)): shutil.copytree(os.path.join('live', d), os.path.join(game, d))
-html = open('live/index.html').read().replace('<script>\n', '<script>window.__STATIC__ = 1;</script>\n<script>\n', 1)
-open(os.path.join(game, 'index.html'), 'w').write(html)
+html = open('live/index.html', encoding='utf-8').read().replace('<script>\n', '<script>window.__STATIC__ = 1;</script>\n<script>\n', 1)
+open(os.path.join(game, 'index.html'), 'w', encoding='utf-8').write(html)
 for f in os.listdir('live/assets'):                                    # textures not in the manifest (a packed atlas) are loaded too
     if f.endswith('.png') and f[:-4] not in manifest: shutil.copy(os.path.join('live/assets', f), os.path.join(game, 'assets'))
 atlased = set(re.findall(r'^\s*"([^"]+)":\s*\[', open('live/atlas.js', encoding='utf-8').read(), re.M)) if os.path.exists('live/atlas.js') else set()
@@ -51,6 +51,8 @@ open(os.path.join(root, 'README.md'), 'w', encoding='utf-8').write(f"""# {a.name
 
 - `game/` — playable build. Serve the folder statically (`cd game && python3 -m http.server`) and open index.html.
   Controls: {hint}
+  Menu: Esc, the ❚❚ button (touch) or gamepad Start: quality (Auto/High/Medium/Low), shadows, music, sound effects,
+  screen shake, touch controls, fullscreen, restart. Phones: on-screen stick and buttons; gamepads work as well.
 - `assets/textures/` — engine-ready PNGs (premultiplied on upload, trimmed, edge-bled); `assets/manifest.json` — per texture
   w, h, crop (box in the source), scale, and walk/bottom lines for platform pieces.
 - `assets/source/` — full-resolution generated sources (art/gen).

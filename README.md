@@ -100,6 +100,25 @@ offscreen culling, instanced batches (`G.batch`, hundreds of bullets or particle
 time p50/p95, draw calls, texture memory). The plan and the measured numbers ship in the game's README. Details:
 [`claude/references/performance.md`](claude/references/performance.md).
 
+## A complete game on every device (Claude Code edition)
+
+The engine ships a game shell, so every slice is a finished game on desktop and phone without game code for it:
+- **Smooth motion at any refresh rate:** a fixed 120 Hz sim drawn with render interpolation (60, 90, 120, 144 Hz all even).
+- **Input everywhere:** keyboard, mouse, touch (a floating stick plus the buttons the game declares) and gamepad. Taps are
+  never lost and keys never stick.
+- **Menu:** Esc, the ❚❚ button or gamepad Start opens it, with quality (Auto/High/Medium/Low), shadows, music, sound effects,
+  screen shake, touch controls, fullscreen, restart and title. A win or game-over card appears when the game ends.
+- **Quality tiers with an adaptive governor:** phones get fewer passes and particles, and Auto steps down when frames run long.
+- **Sound:** every sim event has a sound, from procedural voices matched to the art. The music is either a procedural song or a
+  streamed file. Both switch off from the menu and then cost nothing.
+- **Phone lifecycle:** pauses when the tab is hidden and recovers from a lost WebGL context with the state kept. No pinch-zoom
+  or pull-to-refresh, and it asks you to turn the phone for a landscape game.
+
+The skill also asks better questions up front (platform, fidelity, goal and failure, sound) and writes them to
+`study/BRIEF.md`. It checks every build like a phone would: `livecheck.mjs --mobile --flow --cpu 4` uses real touch, checks
+that the menu pauses and resumes, recovers from context loss, and runs on a slowed CPU. Details:
+[`claude/references/engine.md`](claude/references/engine.md) §11 and [`claude/references/audio.md`](claude/references/audio.md).
+
 ## Examples
 
 **A top-down pixel farm at night**

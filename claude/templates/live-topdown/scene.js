@@ -11,6 +11,7 @@
   S.render = (t) => {
     const ST = S.state || SIM.at(t), GT = ST.t, SS = L.SS, rnd = L.rnd;
     let shk = 0; for (const e of ST.ev) { const a = GT - e.t; if (e.k === 'dash' && a >= 0 && a < 0.2) shk = Math.max(shk, 2.5 * (1 - a / 0.2) ** 2); }
+    shk *= window.Q ? Q.shake : 1;                                                             // Screen shake setting
     const cx = ST.cam[0] + shk * Math.sin(GT * 91), cy = ST.cam[1] + shk * Math.sin(GT * 117);
     const sx = (x) => x - cx, sy = (y) => y - cy;                              // world → screen
     const gw = (x) => SIM.gustAt(t, x), wnd = (x) => SIM.windAt(t, x);
