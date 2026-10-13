@@ -26,7 +26,8 @@
   const detect = () => {
     const coarse = media('(pointer: coarse)'), mem = navigator.deviceMemory || 8, cores = navigator.hardwareConcurrency || 8;
     const d = coarse ? (mem <= 3 || cores <= 4 ? 'low' : 'mid') : 'high';
-    return SET.autoTier && ORDER.indexOf(SET.autoTier) < ORDER.indexOf(d) ? SET.autoTier : d;
+    const fresh = SET.autoTier && Date.now() - (SET.autoTierAt || 0) < 7 * 864e5;   // a governor step-down is re-tested after a week
+    return fresh && ORDER.indexOf(SET.autoTier) < ORDER.indexOf(d) ? SET.autoTier : d;
   };
   const tierNow = () => RENDER ? 'high' : TIERS[qs.get('q')] ? qs.get('q') : SET.quality !== 'auto' && TIERS[SET.quality] ? SET.quality : detect();
   const resolve = () => {
@@ -41,8 +42,10 @@
   // tier's cap, never below 0.5. ?scale=k overrides; renders are always 1.
   S.scaleFor = (shown) => RENDER ? 1 : +(qs.get('scale') || Math.max(0.5, Math.min(Q.scale, shown || 1)));
   const shownNow = () => { const c = window.G && G.canvas; return c ? c.getBoundingClientRect().width * devicePixelRatio / G.W : 1; };
-  S.fit = () => { if (!window.G || !G.canvas || RENDER) return; const k = S.scaleFor(shownNow());
-    if (Math.abs(k - G.SCALE) > 0.04) { G.resize(k); if (window.LIB && LIB.resize) LIB.resize(); } };
+  // the backbuffer (final grade + HUD) at what the screen shows, up to view size; the low tier keeps it at the render scale
+  S.outFor = (shown, k) => RENDER ? 1 : Q.tier === 'low' ? k : Math.max(k, Math.min(1, shown || 1));
+  S.fit = () => { if (!window.G || !G.canvas || RENDER) return; const sh = shownNow(), k = S.scaleFor(sh), o = S.outFor(sh, k);
+    if (Math.abs(k - G.SCALE) > 0.04 || Math.abs(o - G.OUT) > 0.04) { G.resize(k, o); if (window.LIB && LIB.resize) LIB.resize(); } };
   let fitT = 0; addEventListener('resize', () => { clearTimeout(fitT); fitT = setTimeout(S.fit, 250); });
   S.apply = () => { resolve(); save(); S.fit(); if (window.SND) SND.apply(); if (window.INPUT && INPUT.refresh) INPUT.refresh(); };
 
@@ -51,14 +54,16 @@
   // is a 30 Hz display / battery-saver cap, not load: leave it.
   const ring = new Float32Array(120); let ri = 0, rn = 0, since = performance.now(), bad = 0;
   const auto = () => Q.auto && (!navigator.webdriver || qs.has('gov'));
+  const cpuMs = () => { try { return window.__perf ? __perf().cpuP50 : 0; } catch (e) { return 0; } };
   S.watch = (ms, active) => {
     if (!auto() || !active || document.hidden) { rn = ri = 0; since = performance.now(); return; }
     ring[ri] = ms; ri = (ri + 1) % ring.length; rn = Math.min(ring.length, rn + 1);
     const now = performance.now(); if (now - since < (bad ? 2000 : 3000) || rn < 60) return; since = now;
     const a = Array.from(ring.subarray(0, rn)).sort((x, y) => x - y), p50 = a[rn >> 1], p95 = a[Math.floor(rn * 0.95)]; rn = ri = 0;
-    const capped30 = p50 > 31 && p50 < 35.5 && p95 < 38;
+    // a steady ~33 ms is a 30 Hz cap only when the CPU is idle; a 60 Hz phone that misses vsync also shows a steady 33 ms
+    const capped30 = p50 > 31 && p50 < 35.5 && p95 < 38 && cpuMs() < 8;
     bad = p95 > 20 && !capped30 ? bad + 1 : 0;
-    if (bad >= 2 && Q.tier !== 'low') { SET.autoTier = ORDER[ORDER.indexOf(Q.tier) - 1]; bad = 0; S.apply(); console.info('quality: auto →', Q.tier, `(p95 ${p95.toFixed(1)} ms)`); }
+    if (bad >= 2 && Q.tier !== 'low') { SET.autoTier = ORDER[ORDER.indexOf(Q.tier) - 1]; SET.autoTierAt = Date.now(); bad = 0; S.apply(); console.info('quality: auto →', Q.tier, `(p95 ${p95.toFixed(1)} ms)`); }
   };
 
   // ---------------- menu: DOM overlay (costs nothing while closed), keyboard / gamepad / touch ----------------

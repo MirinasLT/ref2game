@@ -74,7 +74,8 @@
     if (!padOn || !navigator.getGamepads) return;
     const gp = [...navigator.getGamepads()].find((g) => g && g.connected); if (!gp) { clearPad(); padOn = false; return; }
     const b = (i) => !!(gp.buttons[i] && gp.buttons[i].pressed), edge = (i) => b(i) && !prevB[i];
-    const dz = (v) => (Math.abs(v) < 0.3 ? 0 : (v - Math.sign(v) * 0.3) / 0.7), ax = dz(gp.axes[0] || 0), ay = dz(gp.axes[1] || 0);
+    // radial deadzone: the stick's direction is kept (no snapping to the axes), its length rescaled from 0.2..0.9 to 0..1
+    const rx = gp.axes[0] || 0, ry = gp.axes[1] || 0, m = Math.sqrt(rx * rx + ry * ry), sc = m < 0.2 ? 0 : Math.min(1, (m - 0.2) / 0.7) / m, ax = rx * sc, ay = ry * sc;
     const M = window.SETTINGS;
     if (M && M.open) {                                                 // menu navigation
       if (edge(12) || (ay < -0.5 && !prevB.up)) M.nav(-1); if (edge(13) || (ay > 0.5 && !prevB.dn)) M.nav(1);
@@ -146,9 +147,10 @@
     const m = document.createElement('div'); m.className = 'menu'; m.textContent = '❚❚'; m.setAttribute('aria-label', 'menu');
     m.addEventListener('pointerdown', (e) => { kill(e); if (window.SETTINGS) SETTINGS.openMenu(); }); root.appendChild(m);
   };
-  // show the overlay: Touch controls = On, or Auto on a touch screen (coarse pointer or a touch seen)
+  // show the overlay: Touch controls = On, or Auto on a touch screen (coarse pointer or a touch seen); SIM.PLATFORM 'mobile'
+  // shows it on every screen (the game is played by touch, also when tested on a desktop)
   I.refresh = () => { if (!ui) return; const s = (window.SET || {}).touch ?? 'auto';
-    ui.root.classList.toggle('on', s === true || (s === 'auto' && (coarse() || touchSeen))); };
+    ui.root.classList.toggle('on', s === true || (s === 'auto' && (I.PLATFORM === 'mobile' || coarse() || touchSeen))); };
   // zones(VW, VH, pw, ph): where the touch controls sit on a phone page (844×390 CSS px landscape by default), as view-px rects
   // [{ id, x, y, w, h }] — qa.mjs fails HUD text under a thumb. Same layout numbers as the overlay (buttons, menu, resting stick).
   I.zones = (vw, vh, pw = vw >= vh ? 844 : 390, ph = vw >= vh ? 390 : 844) => {
@@ -162,11 +164,14 @@
   // rect of an on-screen button in page px (livecheck taps it)
   I.btnRect = (a) => { const b = ui && ui.btn[a]; if (!b) return null; const r = b.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; };
 
-  // init(canvas, VW, VH): pointer in view px on the canvas; touch overlay when SIM.CONTROLS asks for a stick or buttons
+  // init(canvas, VW, VH): pointer in view px on the canvas; touch overlay when SIM.CONTROLS asks for a stick or buttons.
+  // SIM.PLATFORM (Step 0 of the skill): 'universal' (default: keyboard, touch, gamepad), 'desktop' (no touch overlay, no
+  // rotate prompt), 'mobile' (touch overlay always, touch hints; keyboard and gamepad still work for testing)
+  I.PLATFORM = (window.SIM && SIM.PLATFORM) || 'universal';
   I.init = (canvas, w, h) => {
     cv = canvas; VW = w; VH = h; ptr.x = w / 2; ptr.y = h / 2;
     C = ctl();
-    I.hasTouch = !!(C.move || (C.buttons && C.buttons.length));
+    I.hasTouch = I.PLATFORM !== 'desktop' && !!(C.move || (C.buttons && C.buttons.length));
     if (I.hasTouch) { build(); I.refresh(); }
     addEventListener('pointermove', (e) => { if (e.pointerType === 'touch' && !C.pointer) return; toView(e); });
     addEventListener('pointerdown', (e) => {

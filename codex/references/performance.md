@@ -37,7 +37,12 @@ Rules of thumb:
 | Engine feature | Where | Effect |
 |---|---|---|
 | GL state cache (program, VAO, blend, uniforms, bound textures) | gl.js `useP`, `useVao`, `G.blend`, `setU` | No redundant `useProgram`, blend or uniform upload: a default-valued sprite uniform costs nothing after the first draw |
-| Garbage-free sprite path | `L.sprite` (one reused uniform record, scratch arrays) | No per-sprite allocations, so no GC hitches from drawing |
+| Garbage-free draw path | `L.sprite` (reused uniform record, reused `{w,h}` result), primitives (reused uniform records), `G.xf` (scratch), `L.dq` (pooled records), sims' `gusts()` (reused list) | No per-draw allocations, so no GC hitches from drawing |
+| Streaming textures | `SCENE.BOOT`, `G.source`, `G.prefetch`, `G.unload`, `G.dim` | Only the first frame's textures load before play; the rest decode off the main thread on first use; sizes come from the manifest (no upload to measure) |
+| No background copy | `L.beginComp` (comp = bg unless `readBG`) | One full-res pass and one full-res HDR target less per frame for scenes without water/refraction |
+| Crisp HUD at low render scale | `G.resize(scale, out)` | The world renders at the tier's scale, the final grade and HUD at screen resolution |
+| Cheap post | rays at ¼ res below high, HDR bloom with one downsample pass less, bright pass with 4 taps (no shimmer), FINAL skips unbound bloom | Same look, less fill |
+| QA records off in play | `L.QA` (only `?render=1` / `?qa=1`) | No HUD/anchor objects per frame in the shipped game |
 | Offscreen culling | `L.sprite` (non-rig quads; `noCull: true` opts out), `L.glow/shadow/puff/star/ring` | Quads outside the target cost nothing on the GPU |
 | Render scale | `G.init(…, { scale })`, settings.js | Never renders more pixels than the screen shows; tier cap (mid 0.75, low 0.6); re-fit on resize/rotation; `?scale=k` |
 | Quality tiers + governor | settings.js, `Q` (§13) | Phones drop passes, rays, bloom radii and particles; auto steps down when frames run long |
@@ -164,7 +169,10 @@ GC pauses are frame-time spikes (p95, not p50). Hot paths (step, render, per-ent
 - No `map`/`filter`/spread/`{...}`/array literals per entity per frame in hot loops; plain `for` loops over pools.
 - Reuse scratch objects and typed arrays at module scope (`Float32Array`, `Int32Array`). Return numbers, not `[x, y]`, from
   functions called thousands of times.
-- The event bus is capped (64); keep it that way.
+- The event bus is capped (256, ~2 s); keep it that way.
+- Engine helpers that return records reuse them: `L.sprite`'s `{w, h}`, `L.at`'s `L.PT`, `G.xf`, `gusts()`. Read them at once,
+  never keep them across another call.
+- Constant option records go at module scope (`const U_ROCK = { rim: [...] }`), not as literals inside `render`.
 - Load-time and level-start allocation is fine; that's where pools and tables are built.
 - `__perf().heapMB` (Chromium) should be flat during play; a sawtooth means per-frame allocation.
 
@@ -175,6 +183,8 @@ A 2048² RGBA texture with mips is 21 MB of GPU memory, no matter how small the 
 - **Size textures to their display size:** about 1.5–2 × the size in `SIZES` at the target view, not the generator's native
   resolution. Downscale in prep, keep the full source in `art/gen`.
 - **Atlases** cut the per-texture overhead and the switches (§1).
+- **Stream, don't preload everything:** `SCENE.BOOT` = the first frame's names; other levels load on first use or ahead with
+  `G.prefetch(next level)`, and `G.unload(level left)` gives the memory back. `texMB` counts what is loaded now.
 - **GPU compression (ASTC on iOS and modern Android, ETC2 on the rest)** through KTX2 + Basis Universal cuts memory 4–8×. It
   needs a transcoder (wasm) at load time, so it belongs in the delivery build of a game that is over the texture budget after
   resizing and atlasing, not in the live loop. Check `WEBGL_compressed_texture_astc` / `_etc` on the target devices first.

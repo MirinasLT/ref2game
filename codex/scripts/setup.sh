@@ -86,6 +86,8 @@ Strict <projection/view>. No text, no logos, no watermark, no glow, no light ray
 TXT
 cp_new "$SKILL/templates/PERF.md" "$PROJ/study/PERF.md"        # the performance plan, filled in Phase 1 (performance.md §12)
 cp_new "$SKILL/templates/BRIEF.md" "$PROJ/study/BRIEF.md"      # the Step 0 answers (SKILL.md), read by every gate and critic
+# the project map any later session reads first (Codex loads AGENTS.md by itself): files, where things go, the rules
+[ -e "$PROJ/AGENTS.md" ] || sed "s#<skill>#$SKILL#g" "$SKILL/templates/GAME.md" > "$PROJ/AGENTS.md"
 (cd "$PROJ" && "$PYTHON" "$SKILL/scripts/placeholders.py" --out art/gen --set "$GENRE" >/dev/null && "$PYTHON" "$SKILL/scripts/prep.py" >/dev/null)
 echo "project ready: $PROJ"
 echo "  live preview : (cd $PROJ && bash $SKILL/scripts/serve.sh)      # prints the URL; keep it open while you work"

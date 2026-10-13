@@ -14,4 +14,9 @@ console.log(`${got}${S.hearts !== undefined ? '  hearts ' + S.hearts : ''}  end 
 if (process.argv[2] === 'path') for (const p of path) console.log(p.join(' '));
 const self = SIM.selfCheck ? SIM.selfCheck() : []; for (const f of self) console.log('FAIL', f);
 if (SIM.selfCheck) console.log(`selfCheck ${self.length ? self.length + ' failure(s)' : 'ok'}`);
-process.exitCode = ok && !self.length ? 0 : 1;
+// determinism: the same script twice gives the same state, and SIM.at(t) is the same after jumping ahead and back (the demo,
+// renders and every check depend on it; a Math.random, a Date or a state kept outside S breaks it)
+const run = () => { const R = SIM.create(); while (R.t < SIM.L * 0.75 - 1e-6) SIM.step(R, SIM.scriptInput(R.t, R)); return JSON.stringify(R); };
+const t6 = SIM.L * 0.6, a1 = JSON.stringify(SIM.at(t6)); SIM.at(SIM.L * 0.9); const a2 = JSON.stringify(SIM.at(t6));
+const det = run() === run() && a1 === a2; console.log(`determinism ${det ? 'ok' : 'FAIL (same input, different state)'}`);
+process.exitCode = ok && !self.length && det ? 0 : 1;

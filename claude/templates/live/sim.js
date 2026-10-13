@@ -7,7 +7,10 @@
   const DT = 1 / 120, L = 8.0;                              // attract loop length (s)
   // feel numbers (px, s): Celeste-like timings, scaled to a ~1920x1080 view
   // HW: half the hero's foot width — it stands on a ledge until its feet, not its centre, leave it (no hanging in the air)
-  const K = { G: 2600, GF: 3000, MAXF: 1500, RUN: 380, ACC_G: 2600, ACC_A: 1700, JUMP: 900, COYOTE: 0.10, BUFFER: 0.12, CUT: 330, APEX: 150, HW: 18, DROP: 0.25 };
+  // ACC: speeding up · DEC: stopping (no input) · TURN: × on reversing (snappy turns) · OVER: bleeding speed above RUN (a spring
+  // or knockback launch keeps its momentum instead of dying in 0.2 s)
+  const K = { G: 2600, GF: 3000, MAXF: 1500, RUN: 380, ACC_G: 2600, ACC_A: 1700, DEC_G: 3400, DEC_A: 1400, TURN: 1.6, OVER: 900,
+    JUMP: 900, COYOTE: 0.10, BUFFER: 0.12, CUT: 330, APEX: 150, HW: 18, DROP: 0.25 };
   const VIEW = { W: 1920, H: 1080 };
   // the level's extent (out of play beyond it) and the camera: follow = share of the hero's offset the camera takes (0.12 = a
   // one-screen slice that drifts; 1 = a scrolling level), x0..x1 = camera limits = what the art covers; fy: vertical follow of
@@ -31,16 +34,20 @@
     const u = (x - p[i][0]) / (p[i + 1][0] - p[i][0] || 1); return p[i][1] + (p[i + 1][1] - p[i][1]) * u; } return null; };
   // the surface to keep walking on: the one stood on if it is still there, else the nearest within tol (stacked planks don't
   // snap the hero to the ground below)
-  const surfAt = (x, y, tol, cur) => { let best = null;
+  // returns one reused record (read it at once): no allocation per step
+  const SA = { s: null, y: 0 };
+  const surfAt = (x, y, tol, cur) => { let bs = null, by = 0;
     for (const s of SURF) { const sy = yOn(s, x, K.HW); if (sy === null || Math.abs(sy - y) > tol) continue;
-      if (s.id === cur) return { s, y: sy };
-      if (!best || Math.abs(sy - y) < Math.abs(best.y - y)) best = { s, y: sy }; }
-    return best; };
+      if (s.id === cur) { bs = s; by = sy; break; }
+      if (!bs || Math.abs(sy - y) < Math.abs(by - y)) { bs = s; by = sy; } }
+    if (!bs) return null; SA.s = bs; SA.y = by; return SA; };
+  const SURF_ID = {}; for (const s of SURF) SURF_ID[s.id] = s;
   const groundBelow = (x, y) => { let best = null; for (const s of SURF) { const sy = yOn(s, x); if (sy !== null && sy >= y - 4 && (best === null || sy < best)) best = sy; } return best; };
   // collectibles: breadcrumbs that trace the intended jump arcs (they ARE the tutorial)
   const COINS = [[570, 680], [608, 641], [643, 628], [1020, 595], [1061, 540], [1099, 516], [1327, 382], [1422, 445]];
   // grass tufts: [x, kind (index into scene's TUFT names), height, in front of the actors (1) or behind (0)]
   const TUFTS = [[300, 0, 90, 0], [360, 1, 50, 1], [700, 2, 70, 0], [1100, 0, 96, 0], [1150, 1, 52, 1], [1700, 2, 84, 0], [1760, 1, 50, 1]];
+  const TUFT_Y = TUFTS.map(([tx]) => groundBelow(tx, 0) ?? 860);           // the ground under each tuft (static: computed once)
   // attract script: [time, key, down] — tune with `node live/tune.cjs`
   const SCRIPT = [[0, 'right', 1], [1.5, 'jump', 1], [1.8, 'jump', 0], [2.74, 'jump', 1], [3.04, 'jump', 0], [3.34, 'jump', 1], [3.64, 'jump', 0]];
 
@@ -49,10 +56,12 @@
   // integer hash → [0, 1): bit-identical in every JS engine (a sin() hash is not: engines differ in sin's last bits and ×43758 amplifies them)
   const h1 = (n) => { let x = Math.imul(Math.round(n * 1024) | 0, 0x9e3779b1); x ^= x >>> 15; x = Math.imul(x, 0x85ebca77); x ^= x >>> 13; x = Math.imul(x, 0xc2b2ae3d); x ^= x >>> 16; return (x >>> 0) / 4294967296; };
   const GUST = 14, GUST_V = 360;
-  const gusts = (t) => { const k = Math.floor(t / GUST), out = [];
-    for (const kk of [k - 1, k]) { const t0 = kk * GUST + 2 + 6 * h1(kk); if (t < t0) continue;
-      const front = -500 + GUST_V * (t - t0); if (front < VIEW.W + 1000) out.push({ k: kk, t0, front, amp: 0.8 + 0.7 * h1(kk + 0.5) }); }
-    return out; };
+  // the active fronts, in one reused list (read it at once; the next call overwrites it): no garbage per step or per gustAt
+  const GB = [{ k: 0, t0: 0, front: 0, amp: 0 }, { k: 0, t0: 0, front: 0, amp: 0 }], GL = [];
+  const gusts = (t) => { const k = Math.floor(t / GUST); GL.length = 0;
+    for (let kk = k - 1; kk <= k; kk++) { const t0 = kk * GUST + 2 + 6 * h1(kk); if (t < t0) continue;
+      const front = -500 + GUST_V * (t - t0); if (front < VIEW.W + 1000) { const o = GB[GL.length]; o.k = kk; o.t0 = t0; o.front = front; o.amp = 0.8 + 0.7 * h1(kk + 0.5); GL.push(o); } }
+    return GL; };
   const gustAt = (t, x, gl = gusts(t)) => { let g = 0; for (const q of gl) { const d = x - q.front; g += q.amp * Math.exp(-((d / (d > 0 ? 140 : 420)) ** 2)); } return g; };
   const windAt = (t, x, gl) => 0.25 * Math.sin(0.6 * t + 0.013 * x) + 0.12 * Math.sin(1.7 * t + 0.031 * x + 1.3) + gustAt(t, x, gl);
   const ss = (e0, e1, x) => { const q = Math.max(0, Math.min(1, (x - e0) / (e1 - e0))); return q * q * (3 - 2 * q); };
@@ -61,7 +70,7 @@
     return { t: 0, steps: 0, wt0: 0, vj: false,            // wt0: world-clock offset (wind matches the scene's t); vj: variable jump (play)
       x: -60, y: 860, vx: K.RUN, vy: 0, ground: 'ground', face: 1, dist: 0, coyote: 0, buf: 0, prevJump: 0, cut: false,
       landT: -9, landV: 0, jumpT: -9, hurtT: -9, hearts: 3, freeze: 0, bank: 0, dropT: -9, dropId: null, gy: 860,
-      capeTh: -6, capeOm: 0, cam: 0, camV: 0, camY: 0, camYV: 0, ev: [],
+      capeTh: -6, capeOm: 0, cam: 0, camV: 0, camY: 0, camYV: 0, lead: CAM.lead, warp: 0, ev: [],
       got: COINS.map(() => -1),                            // -1 available, ≥0 collect time, -2 collected in an earlier life
       tf: TUFTS.map(() => [0, 0, -9]) };                   // tuft lean px, lean velocity, last rustle time
   }
@@ -75,30 +84,32 @@
     const t = S.t + DT, wt = S.wt0 + t, gl = gusts(wt);                     // gust fronts once per step, shared by every tuft
     // ---- world reactions integrate every step (also during hit-stop) ----
     const landed = S.landT === S.t;
-    TUFTS.forEach(([tx, , th], i) => {
-      const f = S.tf[i], ty = groundBelow(tx, 0) ?? 860; let tg = 12 * windAt(wt, tx, gl) * th / 100;
-      const push = (ax, ay, r, k, vx) => { const up = ty - ay; if (up < -20 || up > th * 0.85) return 0; const dx = tx - ax, w = ss(r, r * 0.15, Math.abs(dx));
-        tg += (Math.sign(dx || 1) * 0.30 * th * k + vx * 0.012) * w; return w; };
-      const wh = push(S.x, S.y, 78, 1, S.vx);
+    for (let i = 0; i < TUFTS.length; i++) {
+      const tx = TUFTS[i][0], th = TUFTS[i][2], f = S.tf[i], ty = TUFT_Y[i]; let tg = 12 * windAt(wt, tx, gl) * th / 100, wh = 0;
+      const up = ty - S.y;                                                    // the hero's push: lean away, harder the closer
+      if (up >= -20 && up <= th * 0.85) { const dx = tx - S.x; wh = ss(78, 78 * 0.15, Math.abs(dx)); tg += (Math.sign(dx || 1) * 0.30 * th + S.vx * 0.012) * wh; }
       if (landed && wh > 0) f[1] += Math.sign(tx - S.x || 1) * Math.min(900, S.landV) * 0.35 * th / 100;
       if (wh > 0.6 && Math.abs(S.vx) > 120 && t - f[2] > 0.5) { f[2] = t; S.ev.push({ k: 'rustle', t, x: tx, y: ty - th * 0.55, i, d: Math.sign(S.vx) }); }
       f[1] += (355 * (tg - f[0]) - 11 * f[1]) * DT; f[0] += f[1] * DT;           // spring f≈3 Hz, ζ≈0.3
-    });
-    if (S.freeze > 0) { S.freeze -= DT; S.t = t; S.steps++; return S; }       // hit-stop: hero + camera hold, world keeps moving
-
-    // ---- input ----
+    }
+    // ---- input (read before hit-stop: a jump pressed during the freeze is buffered, not lost) ----
     const dir = (inp.right ? 1 : 0) - (inp.left ? 1 : 0);
     if (dir) S.face = dir;
-    const jumpHeld = !!(inp.jump || inp.up), jumpEdge = jumpHeld && !S.prevJump; S.prevJump = jumpHeld;
-    S.buf = jumpEdge ? (S.vj ? K.BUFFER : 0.10) : Math.max(0, S.buf - DT);
+    const jumpHeld = !!inp.jump, jumpEdge = jumpHeld && !S.prevJump; S.prevJump = jumpHeld;   // not `up`: a diagonal stick push never jumps
+    S.buf = jumpEdge ? (S.vj ? K.BUFFER : 0.10) : S.freeze > 0 ? S.buf : Math.max(0, S.buf - DT);
+    if (S.freeze > 0) { S.freeze -= DT; S.t = t; S.steps++; return S; }       // hit-stop: hero + camera hold, world keeps moving
     // ---- drop through a one-way ledge: down + jump (never through the ground) ----
     if (S.ground && S.ground !== 'ground' && inp.down && jumpEdge) { S.dropId = S.ground; S.dropT = t; S.ground = null; S.buf = 0; S.coyote = 0; S.ev.push({ k: 'drop', t, x: S.x, y: S.y }); }
     // ---- horizontal ----
-    const acc = S.ground ? K.ACC_G : K.ACC_A, target = dir * K.RUN;
+    const g0 = !!S.ground, sv = Math.sign(S.vx), target = dir * K.RUN;
+    let acc = g0 ? K.ACC_G : K.ACC_A;
+    if (!dir) acc = g0 ? K.DEC_G : K.DEC_A;
+    else if (sv && sv !== dir) acc *= K.TURN;
+    else if (Math.abs(S.vx) > K.RUN) acc = K.OVER;
     S.vx = S.vx < target ? Math.min(target, S.vx + acc * DT) : Math.max(target, S.vx - acc * DT);
     const py = S.y, px = S.x;
     if (S.ground) {
-      const gs = SURF.find((s) => s.id === S.ground), sl = gs ? ((yOn(gs, S.x + 2, K.HW) ?? S.y) - (yOn(gs, S.x - 2, K.HW) ?? S.y)) / 4 : 0;
+      const gs = SURF_ID[S.ground], sl = gs ? ((yOn(gs, S.x + 2, K.HW) ?? S.y) - (yOn(gs, S.x - 2, K.HW) ?? S.y)) / 4 : 0;
       S.x += S.vx * DT / Math.sqrt(1 + sl * sl);                            // run speed measured along the slope
       const g = surfAt(S.x, S.y, 30, S.ground);
       if (g) { S.y = g.y; S.ground = g.s.id; S.gy = g.y; S.coyote = S.vj ? K.COYOTE : 0.08; } else S.ground = null;
@@ -121,15 +132,18 @@
     // ---- jump (buffered, coyote) ----
     if (S.buf > 0 && (S.ground || S.coyote > 0)) { S.vy = -K.JUMP; S.ground = null; S.coyote = 0; S.buf = 0; S.jumpT = t; S.cut = true; S.ev.push({ k: 'jump', t, x: S.x, y: S.y }); }
     // ---- collectibles ----
-    S.got.forEach((g, i) => { if (g !== -1) return; const [cx, cy] = COINS[i];
-      if (Math.hypot(cx - S.x, cy - (S.y - 80)) < 62) { S.got[i] = t; S.ev.push({ k: 'collect', t, x: cx, y: cy, i }); } });
+    for (let i = 0; i < COINS.length; i++) { if (S.got[i] !== -1) continue; const cx = COINS[i][0], cy = COINS[i][1], dx = cx - S.x, dy = cy - (S.y - 80);
+      if (dx * dx + dy * dy < 62 * 62) { S.got[i] = t; S.ev.push({ k: 'collect', t, x: cx, y: cy, i }); } }   // no Math.hypot: its last bits differ between engines
     // ---- cape / hair / ears: damped spring toward a velocity-driven angle (follow-through) ----
     const ct = Math.max(-32, Math.min(38, S.vy * 0.03)) - 6 + (S.ground ? Math.max(-14, Math.min(14, -Math.abs(S.vx) * 0.03)) : 0);
     S.capeOm += (170 * (ct - S.capeTh) - 15 * S.capeOm) * DT; S.capeTh += S.capeOm * DT;
     // ---- camera: critically damped follow with forward focus (asymmetric clamp keeps framing art on screen) ----
-    const ctg = Math.max(CAM.x0, Math.min(CAM.x1, (S.x + S.face * CAM.lead - VIEW.W / 2) * CAM.follow));
+    S.lead += (S.face * CAM.lead - S.lead) * Math.min(1, 3 * DT);                // the look-ahead eases across on a turn, never jumps
+    const ctg = Math.max(CAM.x0, Math.min(CAM.x1, (S.x + S.lead - VIEW.W / 2) * CAM.follow));
     S.camV += (36 * (ctg - S.cam) - 12 * S.camV) * DT; S.cam += S.camV * DT;
-    const cty = Math.max(CAM.y0, Math.min(CAM.y1, (S.gy - CAM.base) * CAM.fy));
+    let cty = (S.gy - CAM.base) * CAM.fy;
+    if (CAM.fy) cty = Math.max(S.y - 0.85 * VIEW.H, Math.min(S.y - 0.2 * VIEW.H, cty));   // a long fall or a high jump never leaves the screen
+    cty = Math.max(CAM.y0, Math.min(CAM.y1, cty));
     S.camYV += (20 * (cty - S.camY) - 9 * S.camYV) * DT; S.camY += S.camYV * DT;
     pruneEv(S, t);
     S.t = t; S.steps++;
@@ -162,7 +176,7 @@
           for (let i = 0; i < 20; i++) { step(S, { right: 1 }); if (yOn(s, S.x) !== null && S.ground !== s.id && S.ground !== null) { out.push(`walking ${s.id} at x=${x | 0} snapped to ${S.ground}`); break; } } } } }
     return out; };
   // LERP: state keys the shell interpolates between steps (smooth motion at any refresh rate); add moving things' scalar keys
-  const LERP = ['x', 'y', 'cam', 'camY', 't'];
+  const LERP = ['x', 'y', 'cam', 'camY', 'capeTh', 't'];
   root.SIM = { DT, L, K, VIEW, LEVEL, CAM, CONTROLS, HINT, LERP, SURF, COINS, TUFTS, yOn, surfAt, groundBelow, selfCheck, gusts, gustAt, windAt, create, spawn, respawn, outOfPlay, step, at, scriptInput };
   if (typeof module !== 'undefined') module.exports = root.SIM;
 })(typeof window !== 'undefined' ? window : globalThis);

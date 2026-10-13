@@ -15,6 +15,7 @@ Background notes per game family: camera, layers, sim, interactions, what makes 
 
 | Concern | Rule |
 |---|---|
+| 2.5D in the engine | `L.view({ mode: 'side' \| 'top' \| 'iso' \| 'persp' })` + `L.at(x, y, z)` project the world, `L.dq` draws far → near with stable ties, `L.shadowAt` keeps the ground shadow under anything in the air (engine.md §4). The top-down template is the worked example: x/y on the ground, a hop on z. Pseudo-3D roads and runners use `'persp'` (scale = f / depth). |
 | Sort key | Sort by whatever encodes depth in the projection. Side view: layer, then z. Top-down / 3/4: layer, then the foot (ground-contact) Y. Isometric: layer, then `gx+gy` and height, or a topological sort for multi-tile boxes. Depth lane: layer, then ground Y. Always break ties on a stable id, or the attract replay flickers. |
 | Pivot | The pivot is the ground-contact point, not the sprite centre. Tall props and tiles need a sort origin at their base. |
 | Hit-stop | Scale it with the weight of the hit, and always add it on killing blows. Fighting games show the principle: Smash derives hitlag from damage with a cap; SFV steps it by light/medium/heavy. Too short reads as no impact; too long reads as lag. |

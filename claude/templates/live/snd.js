@@ -68,13 +68,15 @@
   A.play = (name, o = {}) => {
     if (!ctx || ctx.state !== 'running' || !set().sfx) return;
     const now = ctx.currentTime;
-    if (now - (last[name] ?? -1) < GAP || live >= MAXV) { A.dropped++; return; }
+    const def = bufs[name] ? null : (D().defs || {})[name] || A.PRESETS[name]; if (!bufs[name] && !def) return;
+    const nv = def ? [].concat(def).length : 1;                        // a layered sound takes one slot per voice
+    if (now - (last[name] ?? -1) < GAP || live + nv > MAXV) { A.dropped++; return; }
     last[name] = now; A.played++;
-    let dest = sfxG;
-    if (o.pan) { const p = ctx.createStereoPanner(); p.pan.value = Math.max(-1, Math.min(1, o.pan)); p.connect(sfxG); dest = p; }
+    let dest = sfxG, pn = null;
+    if (o.pan) { pn = ctx.createStereoPanner(); pn.pan.value = Math.max(-1, Math.min(1, o.pan)); pn.connect(sfxG); dest = pn;
+      setTimeout(() => pn.disconnect(), 4000); }                       // freed after the longest sound, never leaks a node per shot
     if (bufs[name]) { const s = ctx.createBufferSource(), g = ctx.createGain(); s.buffer = bufs[name]; s.playbackRate.value = o.rate || 1;
       g.gain.value = o.v ?? 1; s.connect(g); g.connect(dest); s.start(now); live++; s.onended = () => { live--; g.disconnect(); }; return; }
-    const def = (D().defs || {})[name] || A.PRESETS[name]; if (!def) return;
     for (const vd of [].concat(def)) voice(vd, dest, now, o);
     const dk = o.duck ?? A.DUCK[name]; if (dk !== undefined && dk < 1) duck(dk, Math.max(0.5, ...[].concat(def).map((vd) => (vd.n || 0) + vd.d)));
   };
@@ -108,7 +110,8 @@
     const sp = 60 / (sg.bpm || 90) / 2, den = sg.density ?? 0.85;
     const deg = (d, oct) => { const n = sc.length, i = ((d % n) + n) % n; return root + 12 * (oct + Math.floor(d / n)) + sc[i]; };
     const S = { k: 0, next: ctx.currentTime + 0.12 };
-    const tick = () => { while (S.next < ctx.currentTime + 0.3) {
+    const tick = () => { if (S.next < ctx.currentTime) S.next = ctx.currentTime + 0.02;   // after a stall: skip ahead, never a burst of late notes
+      while (S.next < ctx.currentTime + 0.3) {
       const bar = Math.floor(S.k / 8), i = S.k % 8, ch = prog[bar % prog.length], B = Math.floor(bar / 8) % 2 === 1, t = S.next;
       if (i === 0 && sg.pad !== null) for (const d of [0, 2, 4]) tone(sg.pad || 'sawtooth', deg(ch + d, 0), t, sp * 8.4, 0.035, sp * 2, 900);
       if (i % 4 === 0 && sg.bass !== null) tone(sg.bass || 'sine', deg(ch, -1), t, sp * 3.6, 0.16, 0.01, 600);
@@ -129,14 +132,15 @@
   A.apply = () => {
     if (!ctx) return; const s = set(), sg = D().song || {};
     out.gain.value = s.vol ?? 0.8; sfxG.gain.value = s.sfx ? 1 : 0; musG.gain.cancelScheduledValues(0); musG.gain.value = s.music ? sg.v ?? 0.45 : 0;
-    if ((!s.sfx && !s.music) || document.hidden) ctx.suspend(); else ctx.resume();
+    if ((!s.sfx && !s.music) || document.hidden) ctx.suspend().catch(() => {}); else ctx.resume().catch(() => {});
     music();
   };
   // unlock(): call from every user gesture (cheap after the first). Creates the context only when sound or music is on.
   A.unlock = () => {
     // not just 'suspended': iOS leaves the context 'interrupted' after a call, Siri or a lock
-    if (ctx) { if (ctx.state !== 'running' && ctx.state !== 'closed' && !document.hidden && (set().sfx || set().music)) { ctx.resume(); music(); } return; }
+    if (ctx) { if (ctx.state !== 'running' && ctx.state !== 'closed' && !document.hidden && (set().sfx || set().music)) { ctx.resume().catch(() => {}); music(); } return; }
     const s = set(), AC = window.AudioContext || window.webkitAudioContext; if ((!s.sfx && !s.music) || !AC) return;
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* iOS 16.4+: play with the silent switch on */ }
     ctx = new AC({ latencyHint: 'interactive' });
     out = ctx.createGain(); const comp = ctx.createDynamicsCompressor(); out.connect(comp); comp.connect(ctx.destination);
     sfxG = ctx.createGain(); musG = ctx.createGain(); sfxG.connect(out); musG.connect(out);

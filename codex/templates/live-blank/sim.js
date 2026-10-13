@@ -19,7 +19,7 @@
     if (pr && !S.press) { S.pressT = t; S.ev.push({ k: 'down', t, x: S.x, y: S.y }); }
     if (!pr && S.press) S.ev.push({ k: 'up', t, x: S.x, y: S.y, held: t - S.pressT });
     S.press = pr;
-    ITEMS.forEach(([x, y], i) => { const on = S.got[i] === -1 && Math.hypot(S.x - x, S.y - y) < R, h = S.hov[i];
+    ITEMS.forEach(([x, y], i) => { const on = S.got[i] === -1 && (S.x - x) ** 2 + (S.y - y) ** 2 < R * R, h = S.hov[i];
       h[1] += (300 * ((on ? (S.press ? 0.4 : 1) : 0) - h[0]) - 16 * h[1]) * DT; h[0] += h[1] * DT;      // underdamped: overshoot reads as "alive"
       if (on && inp.click) { S.got[i] = t; S.ev.push({ k: 'collect', t, x, y }); } });
     if (inp.click && !S.ev.some((e) => e.t === t && e.k === 'collect')) S.ev.push({ k: 'tap', t, x: S.x, y: S.y });

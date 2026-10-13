@@ -63,16 +63,18 @@ Rules:
 ## 3. gl.js
 
 - `G.init(canvas, W, H, { scale, preserve, oct })`: W×H is the view every draw uses; `scale` (0.25..1) renders the backbuffer and all of lib's targets at fewer pixels (settings.js picks it: never above what the screen shows, never above the tier's cap, `?scale=k` overrides, `?render=1` = 1). `oct`: fbm octaves compiled into every shader (tier). `preserve` only for screenshots.
-- `G.resize(scale)` + `L.resize()`: change the render scale at runtime (settings.js does it on window resize, rotation and tier change). Scene-made targets register a maker in `L.onResize` so they follow.
+- `G.resize(scale, out)` + `L.resize()`: `scale` = the scene's render targets, `out` (scale..1) = the backbuffer where the final grade upsamples the scene and the HUD draws (settings.js: what the screen shows up to view size; the low tier keeps it at `scale`), so a phone rendering the world at 0.66 still gets crisp text and edges. Change them at runtime (settings.js does it on window resize, rotation and tier change). Scene-made targets register a maker in `L.onResize` so they follow.
 - `G.CAPS = { hdr, maxTex }`: `G.target(w, h, true)` is half-float when the GPU renders to it, else RGBA8 (checked, never a silent black frame). `G.free(target)` deletes one.
 - GL state is cached: `G.blend(mode)` with the current mode, a uniform with the value this program already has, a texture already on its unit, all cost nothing. Code that binds a texture with raw `gl` calls must call `G.dirtyTex()`.
 - `G.load(name, url, {repeat, nearest})`. `nearest`: NEAREST min/mag, no mipmaps (lod bias does nothing). index.html sets it for the names in `SCENE.NEAREST`, or for all when `SCENE.NEAREST = true`.
 - `G.canvasTex(name, canvas)`
 - `G.tex(name)` returns `{t, w, h}`; for a name packed by `atlas.py` it returns the atlas texture plus `src` (its uv rect) and its own w, h, so every draw path handles atlased names unchanged.
+- **Streaming (big games).** `SCENE.BOOT = [names]` lists what the first frame needs; only those (and their atlas sheets) load before play. Any other name loads on first use: until it lands it is a `pending` stub of its real size that draws nothing, and the image is decoded off the main thread before the upload (no hitch). `G.prefetch(names)` warms the next level while this one plays, `G.unload(names)` frees the level you left, `G.loaded(name)` tells whether it is in. No `SCENE.BOOT` = everything at boot (fine under ~40 MB of textures). Renders (`?render=1`) always load everything.
+- `G.dim(name)` = `{w, h}` from the loaded texture, the atlas entry or the `ASSETS` manifest, never touching the GPU (`L.hsz`, `L.sz` use it: picking or laying out a sprite never uploads it). `G.mem()` = bytes of the textures actually loaded (with mips); `__perf().texMB` reports it.
 - `G.program(name, fragSrc)`. The vertex shader is fixed. The fragment shader gets `v_uv` (0..1 over the quad, flipped by `u_flip`), `v_px` (screen px), `u_res` and `u_t`, plus the COMMON helpers `hash`, `vnoise`, `fbm` and `scr(px)` (screen px to render-target uv).
 - `G.target(w, h, float, {view, nearest})`: `view` = the coordinate space draws use (default `[w, h]`), so a small target can still be drawn in view px; `nearest` samples it crisp. `G.bind(target | null, clearRGBA?)`
 - `G.blend('add' | 'screen' | 'none' | default=premultiplied over)`
-- `G.xf(x, y, w, h, rot, px, py)` gives an affine for a quad with top-left (x, y), size w×h, rotated about the pivot (px, py) in local px.
+- `G.xf(x, y, w, h, rot, px, py)` gives an affine for a quad with top-left (x, y), size w×h, rotated about the pivot (px, py) in local px. It returns one scratch array (no garbage per draw): pass it straight to `G.draw`, never keep it.
 - `G.batch(name)` returns a reusable instanced batch for one texture (or atlas): `b.add(x, y, w, h, { rot, pivot, src, flip, alpha, tint })` per quad, `b.flush()` once = one draw call (`performance.md` §1). `b.lod` = mip bias.
 - `G.onScreen(x, y, w, h, margin)`: is the rect visible in the bound target? (`L.sprite` culls with it automatically; `noCull: true` opts out.)
 - `G.stats` = `{ draws, progs, inst }` of the current frame; `G.frame()` (index.html, once per frame) moves them to `G.last`. `window.__perf()` adds frame/CPU p50/p95, texture MB, heap; `?perf=1` or F shows it.
@@ -83,11 +85,13 @@ Textures are uploaded **premultiplied** (no dark halos) with mipmaps and LINEAR_
 ## 4. lib.js API (window.LIB, used as `L` in scenes)
 
 **Setup and math:**
-- `L.init(W, H, extraShaders, { pixel })` compiles all programs into `L.P.<name>` and creates targets `L.T.{bg, comp, mask, rays, b1, b2, c1, c2}`. `pixel: k` (> 1) renders bg and comp into W/k × H/k targets, still drawn in W×H view px, and `finish` upscales them with nearest: crisp pixel art. The HUD (after `finish`) stays full-res.
+- `L.init(W, H, extraShaders, { pixel, readBG })` compiles all programs into `L.P.<name>` and creates targets `L.T.{bg, comp, mask, rays, b1, b2, c1, c2}`. `pixel: k` (> 1) renders bg and comp into W/k × H/k targets, still drawn in W×H view px, and `finish` upscales them with nearest: crisp pixel art. The HUD (after `finish`) stays full-res. `readBG: true` when a custom shader samples `T.bg` after `beginComp` (the frame before the play plane): only then is comp a separate target that `beginComp` copies bg into; otherwise comp *is* bg (no copy, one full-res target less). `L.water`, `L.cracks` (mode 1) and `L.rain` switch it on by themselves; a shader that samples the target it draws into logs a feedback-loop error naming the uniform.
 - Set `L.SUN = [x, y]` for fog scatter and rays.
 - `L.M` gives 2×3 affines: `t(x, y)`, `r(a)`, `s(x, y)`, `mul`, `of(...)`, `ap(M, p)`. Rig chains read like `M.of(M.t(x, y), M.s(face, 1), M.r(a))`.
 - `L.SS(e0, e1, x)` is smoothstep; `L.rnd(a, b)` is a deterministic hash in [0, 1); `L.lerpP(a, b, w)` lerps arrays; `L.ph(t, period, k)` is phase.
-- `L.hsz(name, h)` is the width at height h; `L.sz(name, k)` is `[w·k, h·k]`.
+- `L.hsz(name, h)` is the width at height h; `L.sz(name, k)` is `[w·k, h·k]` (both from `G.dim`: no upload).
+
+**No garbage in the frame.** `L.sprite` returns its drawn `{w, h}` in one reused record (read it at once); the primitives fill reused uniform records; `G.xf` is a scratch array. Game code does the same: hoist constant option records out of `render` (`const U_ROCK = { rim: [0.35, -0.004, -0.004, 1] }` at module scope, then `L.sprite('rock', x, y, { h, u: U_ROCK })`), loop with `for` over pooled arrays, and keep the per-frame literals to the few one-off calls.
 
 **Sprites and passes:**
 - `L.sprite(name, x, y, opts)` draws one textured quad (§5).
@@ -105,6 +109,13 @@ Textures are uploaded **premultiplied** (no dark halos) with mipmaps and LINEAR_
 - `L.cracks(x, y, R, age, seed, mode)` is ground impact fissures (a slam, a stomp, a meteor): jagged branching cracks that race out from the impact point, shattered plates round a crater, a pale broken lip. Mode 0 goes in the ground decal pass, mode 1 after the light pass adds the magma glow, masked by sprites (`effects.md` §4).
 - `L.solid(x, y, w, h, col, rot, px, py)` draws ropes, strings and bars.
 - `L.fog(y, h, [scale, speed, threshold, density], col, seed, t, scatter)` is an fbm fog band across the screen.
+
+**2.5D (projection and depth):** world `x` (right), `y` (ground depth), `z` (height above the ground).
+- `L.view({ mode, cx, cy, tilt, f, horizon, camH })` once per frame: `'side'`, `'top'` (3/4 and beat-'em-up lanes, `tilt` 0.5–1), `'iso'` (2:1 at tilt 1), `'persp'` (pseudo-3D road: scale `f / (y − cy)` toward `horizon`, camera height `camH`).
+- `L.at(x, y, z)` → `L.PT = [sx, sy, scale, depth]` (scratch; scale ≤ 0 = behind the camera, skip it). Draw the sprite at `(sx − w·s/2, sy − h·s)` with size × s.
+- `L.dq.add(depth, kind, i)` per drawable, then `L.dq.draw(DRAW)`: sorted far → near, ties in add order (no flicker), reused records. `DRAW[kind](i)` draws one. The top-down template draws its world through it.
+- `L.shadowAt(x, y, z, rx, ry, amt)`: the contact shadow stays on the ground under something z px up, smaller and fainter as it rises: the one cue that sells height in 2.5D.
+- Sim side: x/y move and collide on the ground plane (`COLLIDE` with `nudge`), z is its own axis (`vz`, gravity, land at 0); hits test overlap in x and y and a depth band (|Δy| < lane width), not just screen rectangles.
 
 **Rig:**
 - `L.twoBone({tex, p, a1, a2, face, rot, w, h, split, root, joint, r, col, u, capDark})` draws a limb from one drawing cut at the joint, plus a round joint cap. It returns the joint's screen position. See `animation.md`.
@@ -167,6 +178,7 @@ Deformations are clamped in the shader; `pow()` of a negative base is NaN, so al
 | `VERSION` | Optional: bump it when the state's meaning changes without its shape changing, so a hot reload starts a fresh run instead of restoring an incompatible state |
 | `RESULT(e, S, P)` | Optional: `{ title, lines }` for the card shown on a `win` / `gameover` event (default: "Level complete" / "Game over" + `e.score`); `P` = saved progress ("Best 12") |
 | `SAVE(S, P)` | Optional: persistent progress → the object to keep (`{ best: Math.max(P.best \|\| 0, S.score), level }`), called on `win` / `gameover` / `save` events, restart, title and a hidden tab; stored in localStorage per game. Plain JSON, small |
+| `PLATFORM` | `'universal'` (default) / `'desktop'` (no touch overlay, no rotate prompt, keyboard hints) / `'mobile'` (touch overlay on every screen, touch hints, fullscreen on the first tap of the packed build). From Step 0; the gates follow it |
 | `FULLSCREEN` | `false` to skip the automatic fullscreen + orientation lock on the first touch in the packed build |
 | `demoCheck(S)` | Optional: does the attract run hit its beats? `tune.cjs` passes on it; without it, every `S.got` ≥ 0 (no `S.got`: pass) |
 | `selfCheck()` | Optional: `[failure strings]` for what the level data must satisfy after every placement pass (every spawn in open space, every enemy able to reach and attack the player, every pickup reachable). `tune.cjs` fails on any |
@@ -185,7 +197,7 @@ Input (input.js, one record whatever the device):
 - Read edges in the sim (`jumpHeld && !S.prevJump`), never in the shell. Top-down movers use `inp.ax/ay` for analog speed.
 - Prompts: `INPUT.glyph('jump')` gives what to print for the device used last ("Space", pad "A", the touch button's label); players remap keys in the menu (Controls), so never hard-code a key name in the HUD.
 
-Collision (`collide.js`, for tile and box games; the side template's polyline walk lines stay as they are): build `W = COLLIDE.world({ tile, cols, rows, data, rects })` once at load (module scope, not in S), then per step `COLLIDE.carry(b, W)` and `COLLIDE.move(b, vx * DT, vy * DT, W, { corner: 6 })` (platformer) or `{ nudge: 10 }` (top-down); read `b.ground`, `b.on`, `b.hitX`, `b.hitY` to zero velocities. Moving platforms are rects whose `dx, dy` the sim sets each step. In node (`tune.cjs`) require it: `const COLLIDE = root.COLLIDE || require('./collide.js')`.
+Collision (`collide.js`, for tile and box games; the side template's polyline walk lines stay as they are): build `W = COLLIDE.world({ tile, cols, rows, data, rects })` once at load (module scope, not in S), then per step `COLLIDE.carry(b, W)` and `COLLIDE.move(b, vx * DT, vy * DT, W, { corner: 6 })` (platformer) or `{ nudge: 10 }` (top-down); read `b.ground`, `b.on`, `b.hitX`, `b.hitY` to zero velocities. Moving platforms are rects whose `dx, dy` the sim sets each step; `carry` moves the rider through collision (a lift under a ceiling or into a wall stops it, never embeds it) and a jump off a moving platform adds its speed (`vx += q.dx / DT`). A box that starts inside a solid walks out instead of being shoved through, `nudge` rounds corners in all four directions, and standing still on a rect keeps `b.on`. In node (`tune.cjs`) require it: `const COLLIDE = root.COLLIDE || require('./collide.js')`.
 
 Principles:
 - **Every reaction lives in the sim:** springs, pendulums, critter FSMs, foliage, camera. The demo and play then behave the same, and `tune.cjs` can check the demo headless.
@@ -204,6 +216,7 @@ Principles:
 - `state`: set by index.html in play mode, otherwise `null`;
 - `REPEAT`: texture names that need wrap;
 - `NEAREST`: texture names loaded with nearest filtering, or `true` for all (true low-res pixel art only; see `styles.md` §1 for HD pixel);
+- `BOOT`: optional, the names the first frame needs; the rest stream in (§3, Streaming);
 - `QA()`: the states and cycles `qa.mjs` checks (below).
 
 W and H come from `SIM.VIEW`, never literals.

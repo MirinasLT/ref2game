@@ -1,6 +1,6 @@
 ---
 name: ref2game
-description: Turn a reference (a screenshot, gameplay video, key art, concept art or mood image) into a live, playable 2D game slice that looks shipped, not like AI slop, and feels alive. Any 2D genre (platformer, top-down, isometric, shmup, puzzle, card/UI, runner…) and any style (pixel, painterly, cel/ink, flat vector, hand-drawn, watercolour, neon…). Art is AI-generated with whatever generator the user picks (Codex built-in image_gen, any image API researched and plugged in on the spot, a local tool, or manual drops). Effects, rigs, animation, wind, reactive objects, critters, game feel, camera and HUD are code in a tiny WebGL2 engine with a hot-reloading live preview. Independent critic agents check every asset, module, animation, frame and the play feel. Use this skill whenever the user wants to make a game, level, scene, prototype, vertical slice, playable demo, sprites, characters, backgrounds or an asset pack "like this", "in this style" or "from this reference", or wants to bring concept art to life as a game, even if they never say "game engine" or "asset pack". Not for 3D games.
+description: Turn a reference (a screenshot, gameplay video, key art, concept art or mood image) into a live, playable 2D game slice that looks shipped, not like AI slop, and feels alive. Any 2D or 2.5D genre (platformer, top-down, isometric, beat-'em-up lanes, pseudo-3D road, shmup, puzzle, card/UI, runner…) and any style (pixel, painterly, cel/ink, flat vector, hand-drawn, watercolour, neon…). Art is AI-generated with whatever generator the user picks (Codex built-in image_gen, any image API researched and plugged in on the spot, a local tool, or manual drops). Effects, rigs, animation, wind, reactive objects, critters, game feel, camera and HUD are code in a tiny WebGL2 engine with a hot-reloading live preview. Independent critic agents check every asset, module, animation, frame and the play feel. Use this skill whenever the user wants to make a game, level, scene, prototype, vertical slice, playable demo, sprites, characters, backgrounds or an asset pack "like this", "in this style" or "from this reference", or wants to bring concept art to life as a game, even if they never say "game engine" or "asset pack". Not for 3D games.
 ---
 
 # ref2game: reference → alive, playable 2D game slice
@@ -59,7 +59,7 @@ This folder is self-contained: scripts, engine templates, references and Playwri
    - Hot paths allocate nothing: pools of plain objects in `S`, grids and scratch typed arrays at module scope.
    - Measure, don't guess: `livecheck.mjs` prints `perf` (frame p50/p95, draws, texture MB); compare it with PERF.md at each gate.
    - Quality tiers (high / mid / low, `performance.md` §13) are automatic; the scene's own extras honour `Q` (`L.fx(n)`, `Q.shadows`, `Q.post`), and no gameplay cue may exist only at the high tier.
-11. **A complete game on every device, from the engine.** The shell (`engine.md` §11) already gives every game smooth fixed-step motion at any refresh rate, keyboard + touch (stick and buttons) + gamepad input, a pause / options menu (quality, shadows, music, sound, shake), win / game-over cards, sound from sim events with music that costs nothing when off (`references/audio.md`), and recovery from phone lifecycle events. Configure it (`SIM.CONTROLS`, `SIM.LERP`, `SIM.HINT`, `win` / `gameover` events, `live/audio.js`); never rebuild input, the loop or the menu in game code.
+11. **A complete game on every device, from the engine.** The shell (`engine.md` §11) already gives every game smooth fixed-step motion at any refresh rate, keyboard + touch (stick and buttons) + gamepad input, a pause / options menu (quality, shadows, music, sound, shake), win / game-over cards, sound from sim events with music that costs nothing when off (`references/audio.md`), and recovery from phone lifecycle events. Configure it (`SIM.PLATFORM`, `SIM.CONTROLS`, `SIM.LERP`, `SIM.HINT`, `win` / `gameover` events, `live/audio.js`); never rebuild input, the loop or the menu in game code. `setup.sh` writes the project's `CLAUDE.md` (from `templates/GAME.md`): the map of files, where new things go and the rules; keep it true when the game grows, so any later session can extend the game without re-learning it.
 
 The references are background knowledge, not rules: the reference and the user decide.
 
@@ -69,19 +69,23 @@ Look at the reference and read the user's description first. For a video, run `s
 
 **Call 1 (always):**
 1. **Image generator:** Codex built-in image_gen (the default when `codex` is on PATH) / an image API the user names (you research it and plug it in) / a local tool via a command template / manual (you write the prompts, the user drops the images in).
-2. **Platform:** Universal: desktop + phone + gamepad (recommended) / Desktop-first / Phone-first (touch, short sessions).
+2. **Platform:** Universal: desktop + phone + gamepad (recommended) / Desktop only (keyboard, mouse, pad; no touch layer) / Phone only (touch first, short sessions). It becomes `SIM.PLATFORM` = `'universal'` / `'desktop'` / `'mobile'`, which the shell honours (touch overlay, rotate prompt, hints, fullscreen) and which sets the gates (`--mobile` runs for universal and mobile).
 3. **Fidelity:** Near-identical to the picture / Inspired by it (same style, new layout and designs) / Style only (a new world in this look).
 4. **The game and the player's role**, when the picture and the description don't settle it (each option: what the player does here). When they do settle it, ask the **scope** instead: one screen / one short level / a level with a boss or finale.
 
-**Call 2 (only for what is still open; skip it when the description answers everything):**
+**Call 2 (only for what is still open, at most four questions, the most open first; skip it when the description answers everything):**
 5. **Goal and session:** a level with an end and a win card / score attack, 1–3 min / endless or sandbox / a few puzzle levels.
 6. **Failure:** soft (respawn, keep progress) / lives, then game over / instant retry.
 7. **Sound:** procedural music + sound effects, both switchable (recommended) / sound effects only / my own music file (they drop it in `live/audio/`) / silent.
 8. **Touch scheme** (phone or universal, only when the genre leaves it open): stick + buttons / tap to move / swipes / one button.
+9. **View and depth**, only when the picture leaves it open: side / top-down 3/4 / isometric / 2.5D lanes (beat-'em-up: walk in depth, jump in height) / pseudo-3D road. It picks the template and `L.view` mode (`engine.md` §4, 2.5D).
+10. **Feel target**, only when the genre leaves it open, as options named from games the player knows: tight and fast (precise platformer) / weighty and deliberate / floaty and relaxed. It sets the `gamefeel.md` numbers (acceleration, jump arc, coyote, buffer) before any tuning.
 
-Decide without asking, and say so in the progress message: quality tiers and their defaults, orientation (from the reference's aspect), controls per device (from the verbs), what is saved.
+Decide without asking, and say so in the progress message: quality tiers and their defaults, orientation (from the reference's aspect), controls per device (from the verbs), what is saved, the view and feel when the picture and genre settle them.
 
-Write the answers to `study/BRIEF.md` (a few lines: game, player, platform and controls, fidelity, goal / fail loop, sound, scope). Every phase, gate and critic reads it; when the user changes their mind, update it first.
+Before Phase 1, read the reference once more as a designer and write the **pre-production notes** into BRIEF.md (a few lines each, no questions): the core loop in one sentence; the verbs and what each one feels like (anticipation, impact, recovery); the 3–5 things in the picture that must read at a glance (hero, threats, pickups, goal); the camera (framing, look-ahead, what stays on screen); the asset list by role (bands, terrain, actors, props, FX, HUD) with the first frame's set marked (`SCENE.BOOT` for big games); and the risks (what could look like AI slop, what could miss 60 fps on a phone). Every later phase builds from these notes.
+
+Write the answers to `study/BRIEF.md` (a few lines: game, player, platform and controls, view, feel, fidelity, goal / fail loop, sound, scope). Every phase, gate and critic reads it; when the user changes their mind, update it first.
 
 All art goes through `gen.py`, which drives Codex too. Don't route generation through other image skills.
 

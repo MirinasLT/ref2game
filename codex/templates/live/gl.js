@@ -14,22 +14,25 @@
   // W×H = view px every draw uses. scale (0.25..1) = backbuffer and render-target resolution relative to the view: the same
   // frame with fewer pixels (phones, small windows). preserve: keep the drawing buffer (only screenshots need it; costs on mobile).
   // oct: fbm octaves (3 low … 5 high). CAPS.hdr: half-float render targets work here (else targets fall back to RGBA8).
-  G.init = (canvas, W, H, { scale = 1, preserve = false, oct = 5 } = {}) => {
+  G.init = (canvas, W, H, { scale = 1, out = scale, preserve = false, oct = 5 } = {}) => {
     G.canvas = canvas; G.W = W; G.H = H; G.OCT = oct;
     gl = G.gl = canvas.getContext('webgl2', { premultipliedAlpha: true, alpha: false, antialias: false, preserveDrawingBuffer: preserve, powerPreference: 'high-performance' });
     if (!gl) throw new Error('WebGL2 is not available on this device/browser');
     const hdr = !!(gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float'));
     gl.getExtension('OES_texture_float_linear');
     G.CAPS = { hdr, maxTex: gl.getParameter(gl.MAX_TEXTURE_SIZE) };
-    G.resize(scale);
+    G.resize(scale, out);
     quadVao = gl.createVertexArray(); gl.bindVertexArray(quadVao); curVao = quadVao;
     gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    stub = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, stub);           // 1×1 transparent: what a still-loading texture draws
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
   };
-  // backbuffer resolution = view × scale (0.25..1). Render targets follow when lib.js re-creates them (L.resize).
-  G.resize = (scale) => { const c = G.canvas; G.SCALE = Math.min(1, Math.max(0.25, scale));
-    c.width = Math.round(G.W * G.SCALE); c.height = Math.round(G.H * G.SCALE); G.BW = c.width; G.BH = c.height; };
+  // scale (0.25..1) = the scene's render targets (lib.js re-creates them in L.resize); out (scale..1) = the backbuffer, where the
+  // final grade upsamples the scene and the HUD draws: a phone renders the world at 0.66 but its text and edges stay crisp
+  G.resize = (scale, out = scale) => { const c = G.canvas; G.SCALE = Math.min(1, Math.max(0.25, scale)); G.OUT = Math.min(1, Math.max(G.SCALE, out));
+    c.width = Math.round(G.W * G.OUT); c.height = Math.round(G.H * G.OUT); G.BW = c.width; G.BH = c.height; };
   const useP = (P) => { if (curP !== P) { gl.useProgram(P.p); curP = P; G.stats.progs++; } };
   const useVao = (v) => { if (curVao !== v) { gl.bindVertexArray(v); curVao = v; } };
   // is the rect (view px of the bound target) at least partly visible? m = margin. Cull before drawing, and before updating
@@ -37,10 +40,11 @@
   G.onScreen = (x, y, w, h, m = 0) => { const vw = cur ? cur.vw : G.W, vh = cur ? cur.vh : G.H;
     return x + w > -m && y + h > -m && x < vw + m && y < vh + m; };
 
-  // nearest: NEAREST min/mag, no mipmaps (pixel art: crisp texels; lod bias has no effect)
+  // nearest: NEAREST min/mag, no mipmaps (pixel art: crisp texels; lod bias has no effect). The image is decoded off the main
+  // thread (img.decode) before the upload, so a texture streamed in mid-game does not hitch the frame.
   G.load = (name, url, { repeat = false, nearest = false } = {}) => new Promise((res, rej) => {
     const im = new Image();
-    im.onload = () => {
+    const up = () => {
       const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t); G.dirtyTex();
       gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
       let src = im; const mx = G.CAPS.maxTex;                  // larger than this GPU allows: downscale, never a silent black quad
@@ -53,22 +57,44 @@
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, nearest ? gl.NEAREST : gl.LINEAR);
       const wr = repeat ? gl.REPEAT : gl.CLAMP_TO_EDGE;
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wr); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wr);
-      texs[name] = { t, w: im.width, h: im.height }; res(texs[name]);
+      const r = texs[name] && texs[name].pending ? texs[name] : (texs[name] = {});      // a stub fills in place: held refs stay valid
+      if (r.t && r.t !== stub) gl.deleteTexture(r.t);
+      Object.assign(r, { t, w: im.width, h: im.height, bytes: src.width * src.height * 4 * (nearest ? 1 : 1.34), own: true }); delete r.pending;
+      for (const k in texs) if (texs[k].atlas === name) delete texs[k];               // atlas aliases re-resolve to the real sheet
+      res(r);
     };
     im.onerror = () => rej(new Error('failed to load ' + url)); im.src = url;
+    im.decode ? im.decode().then(up, () => (im.complete && im.naturalWidth ? up() : rej(new Error('failed to load ' + url)))) : (im.onload = up);
   });
+  // streaming (big games, references/performance.md §8): G.source(name) → { url, repeat, nearest } (index.html sets it). A name
+  // used before it is loaded draws as an empty stub of its real size (ASSETS w/h) and starts loading; G.prefetch warms names
+  // ahead (the next level), G.unload frees them (the level you left). Size queries (G.dim, L.hsz) never touch the GPU.
+  G.source = null; let stub = null;
+  const want = (n) => { const s = G.source && G.source(n); if (!s) return null;
+    const A = window.ASSETS && window.ASSETS[n], r = texs[n] = { t: stub, w: A ? A.w : 1, h: A ? A.h : 1, pending: true };
+    G.load(n, s.url, s).catch((e) => { console.error(e.message); r.failed = true; }); return r; };
+  G.prefetch = (names) => { for (const n of names) { const a = window.ATLAS && window.ATLAS[n]; const k = a ? a[0] : n; if (!texs[k]) want(k); } };
+  G.unload = (names) => { for (const n of names) { const a = window.ATLAS && window.ATLAS[n], k = a ? a[0] : n, r = texs[k];
+    if (!r || !r.own) continue; gl.deleteTexture(r.t); G.dirtyTex(); delete texs[k]; for (const j in texs) if (texs[j].atlas === k) delete texs[j]; } };
+  G.loaded = (n) => { const a = window.ATLAS && window.ATLAS[n], r = texs[a ? a[0] : n]; return !!r && !r.pending; };
+  // size in px without loading anything: a loaded texture, an atlas entry, or the ASSETS manifest
+  G.dim = (n) => { const t = texs[n]; if (t) return t; const a = window.ATLAS && window.ATLAS[n]; if (a) return { w: a[5], h: a[6] };
+    const A = window.ASSETS && window.ASSETS[n]; if (A) return A; return G.tex(n); };
+  G.mem = () => { let b = 0; for (const k in texs) if (texs[k].own) b += texs[k].bytes; return b; };   // bytes of loaded textures (with mips)
   G.canvasTex = (name, cv) => {
     const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t); G.dirtyTex();
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, cv); gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    return (texs[name] = { t, w: cv.width, h: cv.height });
+    return (texs[name] = { t, w: cv.width, h: cv.height, bytes: cv.width * cv.height * 4 * 1.34, own: true });
   };
   // an atlased name (window.ATLAS, scripts/atlas.py) resolves to { t: the atlas, w, h: its own px size, src: its uv rect }, so
   // L.sprite, rigs and batches draw it unchanged, and everything in one atlas can share one batch
   G.tex = (n) => { const t = texs[n]; if (t) return t; const a = window.ATLAS && window.ATLAS[n];
-    if (a && texs[a[0]]) return (texs[n] = { t: texs[a[0]].t, w: a[5], h: a[6], src: [a[1], a[2], a[3], a[4]], atlas: a[0] });
+    if (a) { const sh = texs[a[0]] || want(a[0]); if (sh) { const r = { t: sh.t, w: a[5], h: a[6], src: [a[1], a[2], a[3], a[4]], atlas: a[0], pending: sh.pending };
+      if (!sh.pending) texs[n] = r; return r; } }                       // a pending sheet: an uncached stub alias until it lands
+    const r = want(n); if (r) return r;
     throw new Error('no texture ' + n); };
 
   const VS = `#version 300 es
@@ -133,17 +159,20 @@ vec2 scr(vec2 px){ return vec2(px.x / u_res.x, 1.0 - px.y / u_res.y); }   // scr
     else gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   };
 
-  // affine: place the unit quad at x,y (top-left) with size w,h, rotated by rot (rad) about pivot (px,py) in local px
+  // affine: place the unit quad at x,y (top-left) with size w,h, rotated by rot (rad) about pivot (px,py) in local px.
+  // Returns ONE scratch array (no garbage per draw): pass it straight to G.draw, never keep it.
+  const XF = new Float32Array(9); XF[8] = 1;
   G.xf = (x, y, w, h, rot = 0, px = 0, py = 0) => {
-    const c = Math.cos(rot), s = Math.sin(rot);
+    const c = rot ? Math.cos(rot) : 1, s = rot ? Math.sin(rot) : 0;
     // local (u*w - px, v*h - py) rotated, then + (x + px, y + py)
-    return [w * c, w * s, 0, -h * s, h * c, 0, x + px - (px * c - py * s), y + py - (px * s + py * c), 1];
+    XF[0] = w * c; XF[1] = w * s; XF[3] = -h * s; XF[4] = h * c; XF[6] = x + px - (px * c - py * s); XF[7] = y + py - (px * s + py * c);
+    return XF;
   };
 
   // uniforms keep their value per program, so an upload is skipped when the value did not change since this program's last
   // draw (most sprite uniforms are defaults); textures are skipped when the unit already holds them. Anything that binds a
   // texture outside setU calls G.dirtyTex().
-  let unit = 0; const onUnit = [];
+  let unit = 0, fbWarned = false; const onUnit = [];
   G.dirtyTex = () => { onUnit.length = 0; };
   const same = (u, v) => {
     if (typeof v === 'number') { if (u.v === v) return true; u.v = v; return false; }
@@ -152,7 +181,9 @@ vec2 scr(vec2 px){ return vec2(px.x / u_res.x, 1.0 - px.y / u_res.y); }   // scr
   const setU = (P, k, v) => {
     const u = P.loc[k]; if (!u) return;
     const T = gl;
-    if (u.type === T.SAMPLER_2D) { const tx = v.t || v; if (onUnit[unit] !== tx) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tx); onUnit[unit] = tx; }
+    if (u.type === T.SAMPLER_2D) { const tx = v.t || v;
+      if (cur && tx === cur.t && !fbWarned) { fbWarned = true; console.error(`${P.name}: ${k} samples the target being drawn into (a feedback loop: draws nothing). Reading T.bg after beginComp needs L.init(…, { readBG: true })`); }
+      if (onUnit[unit] !== tx) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tx); onUnit[unit] = tx; }
       if (u.v !== unit) { gl.uniform1i(u.l, unit); u.v = unit; } unit++; return; }
     if (v === undefined || same(u, v)) return;
     if (u.type === T.FLOAT) gl.uniform1f(u.l, v);

@@ -33,6 +33,9 @@ Feel is a handful of numbers, and none of them is universal. Tune them to this g
 | Fall gravity | Higher than rise gravity, so the jump is snappy, not floaty |
 | Max fall | Capped, so long falls stay readable and landings controllable |
 | Air control | Weaker than ground control, but enough to correct a jump in flight |
+| Stop, turn, overspeed | Separate rates: stopping (`K.DEC_*`) faster than starting, reversing ×`K.TURN` (a turn never feels like ice), and speed above run (a spring, knockback, a lift's momentum) bleeds slowly (`K.OVER`) instead of dying at the run acceleration |
+| Camera lead | The look-ahead eases across on a turn (`S.lead`), never jumps a screen-third; vertically, the hero stays inside the middle band on long falls and high jumps |
+| Feel target (Step 0) | Tight and fast: high accel, short apex, small coyote/buffer. Weighty: slower accel and turn, longer anticipation on world objects, bigger hit-stop. Floaty: low gravity, long apex hang, strong air control. Set these first, then tune to the reference |
 | Enemy bounce | Bouncing off an enemy launches the hero; holding jump gives more |
 | Spring or bounce pad | Clearly bigger than a jump, so it opens routes the jump can't reach |
 

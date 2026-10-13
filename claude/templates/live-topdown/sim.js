@@ -1,10 +1,12 @@
 // live/sim.js — deterministic TOP-DOWN (3/4 view) simulation, fixed 120 Hz. Same contract as the side-view template:
 // create / step / at / spawn / respawn / outOfPlay / scriptInput, events in S.ev, every reaction lives here.
-// Mover: 8-direction run with accel/decel + dash (act). Collision: circles (trunks, rocks) + world bounds.
+// Mover: 8-direction run with accel/decel + dash (act) + a hop on its own height axis z (jump: the 2.5D pattern — x/y move and
+// collide on the ground, z rises and falls, the shadow stays on the ground). Collision: circles (trunks, rocks) + world bounds.
 // Reactions: grass tufts lean away and flatten underfoot, critters notice → flee (hops) → return, wind gusts.
 (function (root) {
   const DT = 1 / 120, L = 10.0;
-  const K = { RUN: 330, ACC: 2400, DEC: 2800, DASH: 900, DASH_T: 0.16, DASH_CD: 0.5, R: 26 };
+  const K = { RUN: 330, ACC: 2400, DEC: 2800, DASH: 900, DASH_T: 0.16, DASH_CD: 0.5, DASH_BUF: 0.1, R: 26, HOP: 560, GZ: 2000 };
+  const len = (x, y) => Math.sqrt(x * x + y * y);                       // not Math.hypot: its last bits differ between JS engines
   const VIEW = { W: 1920, H: 1080 }, WORLD = { x0: 0, y0: 0, x1: 2600, y1: 1500 };
 
   // integer hash → [0, 1): bit-identical in every JS engine (a sin() hash is not: engines differ in sin's last bits and ×43758 amplifies them)
@@ -21,21 +23,28 @@
   const ROUTE = [[0, 640, 700], [1.2, 880, 600], [2.2, 1180, 560], [3.0, 1320, 620], [3.8, 1150, 870], [5.0, 1640, 980], [6.2, 1920, 1000], [8.0, 1500, 1060], [9.0, 1000, 900]];
 
   const GUST = 14, GUST_V = 360;
-  const gusts = (t) => { const k = Math.floor(t / GUST), out = [];
-    for (const kk of [k - 1, k]) { const t0 = kk * GUST + 2 + 6 * h1(kk); if (t < t0) continue;
-      const front = -500 + GUST_V * (t - t0); if (front < WORLD.x1 + 1000) out.push({ k: kk, t0, front, amp: 0.8 + 0.7 * h1(kk + 0.5) }); }
-    return out; };
+  // the active fronts, in one reused list (read it at once; the next call overwrites it): no garbage per step or per gustAt
+  const GB = [{ k: 0, t0: 0, front: 0, amp: 0 }, { k: 0, t0: 0, front: 0, amp: 0 }], GL = [];
+  const gusts = (t) => { const k = Math.floor(t / GUST); GL.length = 0;
+    for (let kk = k - 1; kk <= k; kk++) { const t0 = kk * GUST + 2 + 6 * h1(kk); if (t < t0) continue;
+      const front = -500 + GUST_V * (t - t0); if (front < WORLD.x1 + 1000) { const o = GB[GL.length]; o.k = kk; o.t0 = t0; o.front = front; o.amp = 0.8 + 0.7 * h1(kk + 0.5); GL.push(o); } }
+    return GL; };
   const gustAt = (t, x, gl = gusts(t)) => { let g = 0; for (const q of gl) { const d = x - q.front; g += q.amp * Math.exp(-((d / (d > 0 ? 140 : 420)) ** 2)); } return g; };
   const windAt = (t, x, gl) => 0.25 * Math.sin(0.6 * t + 0.013 * x) + 0.12 * Math.sin(1.7 * t + 0.031 * x + 1.3) + gustAt(t, x, gl);
   const ss = (e0, e1, x) => { const q = Math.max(0, Math.min(1, (x - e0) / (e1 - e0))); return q * q * (3 - 2 * q); };
 
   function create() {
-    return { t: 0, steps: 0, wt0: 0, x: 520, y: 760, vx: 0, vy: 0, faceX: 1, faceY: 1, dist: 0, dashT: -9, dashCD: 0, prevAct: 0, dashX: 0, dashY: 0,
+    return { t: 0, steps: 0, wt0: 0, x: 520, y: 760, z: 0, vz: 0, prevJump: 0, vx: 0, vy: 0, faceX: 1, faceY: 1, lx: 1, ly: 0, dist: 0,
+      dashT: -9, dashCD: 0, dashBuf: 0, prevAct: 0, dashX: 0, dashY: 0, warp: 0,
       landT: -9, hurtT: -9, hearts: 3, bank: 0, freeze: 0, ev: [], cam: [0, 0], camV: [0, 0],
       got: COINS.map(() => -1), tf: TUFTS.map(() => [0, 0, -9, 0]),        // lean px, lean vel, last rustle, flatten 0..1
       cr: CRITTERS.map(([x, y]) => ({ x, y, m: 'idle', t0: -9, hx: x, hy: y, n: -1, hop: null, face: 1 })) };
   }
-  const spawn = (worldT) => Object.assign(create(), { wt0: worldT });
+  const camAt = (S) => [Math.max(WORLD.x0, Math.min(WORLD.x1 - VIEW.W, S.x - VIEW.W / 2)), Math.max(WORLD.y0, Math.min(WORLD.y1 - VIEW.H, S.y - VIEW.H / 2))];
+  const spawn = (worldT) => { const S = Object.assign(create(), { wt0: worldT }); S.cam = camAt(S); return S; };   // no camera swoop on (re)spawn
+  // a critter's hop (module scope: no closure per critter per step)
+  const hopTo = (c, t, x1, y1, dur, ht) => { x1 = Math.max(WORLD.x0 + 40, Math.min(WORLD.x1 - 40, x1)); y1 = Math.max(WORLD.y0 + 80, Math.min(WORLD.y1 - 40, y1));
+    c.hop = { t0: t, x0: c.x, y0: c.y, x1, y1, dur, ht }; c.face = Math.sign(x1 - c.x) || c.face; };
   const respawn = (S, worldT) => { const bank = S.bank + S.got.filter((g) => g >= 0).length, all = !S.got.includes(-1);
     return Object.assign(spawn(worldT), { bank, got: all ? S.got.map(() => -1) : S.got.map((g) => (g === -1 ? -1 : -2)) }); };
   const outOfPlay = () => false;
@@ -43,45 +52,57 @@
   function step(S, inp) {
     const t = S.t + DT, wt = S.wt0 + t, gl = gusts(wt);                     // gust fronts once per step, shared by every tuft
     // ---- grass: lean away from the hero (x only: tufts are drawn upright in 3/4 view) + flatten underfoot ----
-    TUFTS.forEach(([tx, ty, , th], i) => { const f = S.tf[i]; let tg = 10 * windAt(wt, tx, gl) * th / 100, flat = 0;
-      const dx = tx - S.x, dy = (ty - S.y) * 1.6, d = Math.hypot(dx, dy);
-      if (d < 90) { const w = ss(90, 14, d); tg += Math.sign(dx || 1) * 0.32 * th * w + S.vx * 0.012 * w; flat = ss(40, 8, d);
-        if (w > 0.6 && Math.hypot(S.vx, S.vy) > 120 && t - f[2] > 0.5) { f[2] = t; S.ev.push({ k: 'rustle', t, x: tx, y: ty - th * 0.5, i, d: Math.sign(S.vx || 1) }); } }
-      f[1] += (355 * (tg - f[0]) - 11 * f[1]) * DT; f[0] += f[1] * DT; f[3] += (flat - f[3]) * Math.min(1, (flat > f[3] ? 14 : 2.5) * DT); });
+    for (let i = 0; i < TUFTS.length; i++) { const tx = TUFTS[i][0], ty = TUFTS[i][1], th = TUFTS[i][3], f = S.tf[i]; let tg = 10 * windAt(wt, tx, gl) * th / 100, flat = 0;
+      const dx = tx - S.x, dy = (ty - S.y) * 1.6, d = len(dx, dy);
+      if (d < 90 && S.z < 30) { const w = ss(90, 14, d); tg += Math.sign(dx || 1) * 0.32 * th * w + S.vx * 0.012 * w; flat = ss(40, 8, d);   // a hop clears the grass
+        if (w > 0.6 && len(S.vx, S.vy) > 120 && t - f[2] > 0.5) { f[2] = t; S.ev.push({ k: 'rustle', t, x: tx, y: ty - th * 0.5, i, d: Math.sign(S.vx || 1) }); } }
+      f[1] += (355 * (tg - f[0]) - 11 * f[1]) * DT; f[0] += f[1] * DT; f[3] += (flat - f[3]) * Math.min(1, (flat > f[3] ? 14 : 2.5) * DT); }
     // ---- critters: idle (small hops near home) → notice (0.15 s crouch) → flee hops → return home when the hero is far ----
-    S.cr.forEach((c, i) => { const d = Math.hypot(c.x - S.x, c.y - S.y);
-      if (c.hop) { const u = (t - c.hop.t0) / c.hop.dur; if (u >= 1) { c.x = c.hop.x1; c.y = c.hop.y1; c.hop = null; S.ev.push({ k: 'hopland', t, x: c.x, y: c.y }); } return; }
-      const hop = (x1, y1, dur, ht) => { x1 = Math.max(WORLD.x0 + 40, Math.min(WORLD.x1 - 40, x1)); y1 = Math.max(WORLD.y0 + 80, Math.min(WORLD.y1 - 40, y1));
-        c.hop = { t0: t, x0: c.x, y0: c.y, x1, y1, dur, ht }; c.face = Math.sign(x1 - c.x) || c.face; };
+    for (let i = 0; i < S.cr.length; i++) { const c = S.cr[i], d = len(c.x - S.x, c.y - S.y);
+      if (c.hop) { const u = (t - c.hop.t0) / c.hop.dur; if (u >= 1) { c.x = c.hop.x1; c.y = c.hop.y1; c.hop = null; S.ev.push({ k: 'hopland', t, x: c.x, y: c.y }); } continue; }
       if (d < 170) { if (c.n < 0) c.n = t; if (t - c.n > 0.15) { const ax = (c.x - S.x) / (d || 1), ay = (c.y - S.y) / (d || 1); c.m = 'flee'; c.t0 = t;
-          hop(c.x + ax * 110 + 30 * (h1(t * 7 + i) - 0.5), c.y + ay * 110, 0.3, 34); S.ev.push({ k: 'flee', t, x: c.x, y: c.y }); } }
+          hopTo(c, t, c.x + ax * 110 + 30 * (h1(t * 7 + i) - 0.5), c.y + ay * 110, 0.3, 34); S.ev.push({ k: 'flee', t, x: c.x, y: c.y }); } }
       else { c.n = -1;
         if (c.m === 'flee' && d > 360 && t - c.t0 > 1.5) c.m = 'return';
-        if (c.m === 'return') { const hx = c.hx - c.x, hy = c.hy - c.y, hd = Math.hypot(hx, hy); if (hd < 8) c.m = 'idle'; else hop(c.x + hx / hd * Math.min(90, hd), c.y + hy / hd * Math.min(90, hd), 0.32, 26); }
-        else if (c.m === 'idle' && h1(Math.floor(t * 0.7) + i * 13) > 0.8 && Math.abs((t * 0.7) % 1) < DT * 0.7) hop(c.hx + 40 * (h1(t + i) - 0.5), c.hy + 30 * (h1(t + i + 3) - 0.5), 0.26, 18); } });
-    if (S.freeze > 0) { S.freeze -= DT; S.t = t; S.steps++; return S; }
-    // ---- input: analog (stick / pad: inp.ax, inp.ay) or 8-direction keys, accel / decel, dash on action ----
+        if (c.m === 'return') { const hx = c.hx - c.x, hy = c.hy - c.y, hd = len(hx, hy); if (hd < 8) c.m = 'idle'; else hopTo(c, t, c.x + hx / hd * Math.min(90, hd), c.y + hy / hd * Math.min(90, hd), 0.32, 26); }
+        else if (c.m === 'idle' && h1(Math.floor(t * 0.7) + i * 13) > 0.8 && Math.abs((t * 0.7) % 1) < DT * 0.7) hopTo(c, t, c.hx + 40 * (h1(t + i) - 0.5), c.hy + 30 * (h1(t + i + 3) - 0.5), 0.26, 18); } }
+    // ---- input (read before hit-stop: a press during the freeze is buffered, not lost) ----
     const kx = (inp.right ? 1 : 0) - (inp.left ? 1 : 0), ky = (inp.down ? 1 : 0) - (inp.up ? 1 : 0);
-    let ix = inp.ax || kx, iy = inp.ay || ky; const il = Math.hypot(ix, iy) || 1, mag = Math.min(1, il);
+    let ix = inp.ax || kx, iy = inp.ay || ky; const il = len(ix, iy) || 1, mag = Math.min(1, il);
     ix /= il; iy /= il; if (!kx && !ky && !inp.ax && !inp.ay) ix = iy = 0;
+    if (ix || iy) { S.lx = ix; S.ly = iy; }
+    const actEdge = !!inp.act && !S.prevAct; S.prevAct = inp.act ? 1 : 0;
+    const jumpEdge = !!inp.jump && !S.prevJump; S.prevJump = inp.jump ? 1 : 0;
+    S.dashBuf = actEdge ? K.DASH_BUF : Math.max(0, S.dashBuf - DT);                 // a dash pressed just before the cooldown ends still fires
+    if (S.freeze > 0) { S.freeze -= DT; S.t = t; S.steps++; return S; }
+    // ---- accel / decel toward the input as one vector (diagonals as fast as straights, turns don't curve) ----
     const tx = ix * K.RUN * mag, ty = iy * K.RUN * mag;
-    const app = (v, tgt) => { const a = (Math.abs(tgt) > Math.abs(v) ? K.ACC : K.DEC) * DT; return v < tgt ? Math.min(tgt, v + a) : Math.max(tgt, v - a); };
-    S.vx = app(S.vx, tx); S.vy = app(S.vy, ty);
+    { const dvx = tx - S.vx, dvy = ty - S.vy, dl = len(dvx, dvy), a = (tx * tx + ty * ty > S.vx * S.vx + S.vy * S.vy ? K.ACC : K.DEC) * DT;
+      if (dl <= a) { S.vx = tx; S.vy = ty; } else { S.vx += dvx / dl * a; S.vy += dvy / dl * a; } }
     if (Math.abs(ix) > 0.3) S.faceX = Math.sign(ix); if (ix || iy) S.faceY = Math.abs(iy) > 0.3 ? Math.sign(iy) : S.faceY;
-    const actEdge = (inp.act || inp.jump) && !S.prevAct; S.prevAct = inp.act || inp.jump; S.dashCD = Math.max(0, S.dashCD - DT);
-    // the dash goes where the input points when it starts (not where the momentum still carries the hero)
-    if (actEdge && S.dashCD <= 0 && (ix || iy)) { S.dashT = t; S.dashCD = K.DASH_CD; S.dashX = ix; S.dashY = iy; S.ev.push({ k: 'dash', t, x: S.x, y: S.y, dx: ix, dy: iy }); }
+    S.dashCD = Math.max(0, S.dashCD - DT);
+    // the dash goes where the input points when it starts, or where the hero last moved (no stick input)
+    if (S.dashBuf > 0 && S.dashCD <= 0) { const dx = ix || iy ? ix : S.lx, dy = ix || iy ? iy : S.ly;
+      S.dashBuf = 0; S.dashT = t; S.dashCD = K.DASH_CD; S.dashX = dx; S.dashY = dy; S.ev.push({ k: 'dash', t, x: S.x, y: S.y, dx, dy }); }
+    // ---- hop: z is its own axis (2.5D); x/y keep moving and colliding on the ground underneath ----
+    if (jumpEdge && S.z === 0) { S.vz = K.HOP; S.ev.push({ k: 'jump', t, x: S.x, y: S.y }); }
+    if (S.z > 0 || S.vz > 0) { S.vz -= K.GZ * DT; S.z += S.vz * DT;
+      if (S.z <= 0) { S.ev.push({ k: 'land', t, x: S.x, y: S.y, v: -S.vz }); S.z = 0; S.vz = 0; S.landT = t; } }
     const dashing = t - S.dashT < K.DASH_T;
     if (dashing) { S.vx = S.dashX * K.RUN; S.vy = S.dashY * K.RUN; }                 // leave the dash at run speed in its direction
-    const mvx = dashing ? S.dashX * K.DASH : S.vx, mvy = dashing ? S.dashY * K.DASH : S.vy;
+    const mvx = dashing ? S.dashX * K.DASH : S.vx, mvy = dashing ? S.dashY * K.DASH : S.vy, px = S.x, py = S.y;
     S.x += mvx * DT; S.y += mvy * DT;
     for (let pass = 0; pass < 2; pass++) for (const o of SOLIDS) {                     // two passes: wedged between two solids settles
-      const dx = S.x - o.x, dy = (S.y - o.y) * 1.4, d = Math.hypot(dx, dy), r = o.r + K.R;     // ellipse-ish ground footprint
+      const dx = S.x - o.x, dy = (S.y - o.y) * 1.4, d = len(dx, dy), r = o.r + K.R;     // ellipse-ish ground footprint
       if (d < r && d > 0) { S.x = o.x + dx / d * r; S.y = o.y + dy / d * r / 1.4; } }
     S.x = Math.max(WORLD.x0 + 40, Math.min(WORLD.x1 - 40, S.x)); S.y = Math.max(WORLD.y0 + 120, Math.min(WORLD.y1 - 30, S.y));
-    const moved = Math.hypot(mvx, mvy) * DT;
-    if (moved > 0.05) { const b = Math.floor(S.dist / 70); S.dist += moved; if (Math.floor(S.dist / 70) !== b) S.ev.push({ k: 'step', t, x: S.x, y: S.y }); }
-    S.got.forEach((g, i) => { if (g !== -1) return; const [cx, cy] = COINS[i]; if (Math.hypot(cx - S.x, cy - (S.y - 30)) < 56) { S.got[i] = t; S.ev.push({ k: 'collect', t, x: cx, y: cy, i }); } });
+    // the velocity is what really happened: against a rock or the world edge the hero slides or stops (no phantom speed:
+    // no footsteps into a wall, no camera leading into it, no deceleration from speed it never had)
+    if (!dashing) { S.vx = (S.x - px) / DT; S.vy = (S.y - py) / DT; }
+    const moved = len(S.x - px, S.y - py);
+    if (moved > 0.05 && S.z === 0) { const b = Math.floor(S.dist / 70); S.dist += moved; if (Math.floor(S.dist / 70) !== b) S.ev.push({ k: 'step', t, x: S.x, y: S.y }); }
+    for (let i = 0; i < COINS.length; i++) { if (S.got[i] !== -1) continue; const cx = COINS[i][0], cy = COINS[i][1];
+      if (len(cx - S.x, cy - (S.y - 30 - S.z)) < 56) { S.got[i] = t; S.ev.push({ k: 'collect', t, x: cx, y: cy, i }); } }
     // ---- camera: follow with look-ahead in the move direction, clamped to the world ----
     const tgx = Math.max(WORLD.x0, Math.min(WORLD.x1 - VIEW.W, S.x - VIEW.W / 2 + S.vx * 0.35));
     const tgy = Math.max(WORLD.y0, Math.min(WORLD.y1 - VIEW.H, S.y - VIEW.H / 2 + S.vy * 0.3));
@@ -94,18 +115,18 @@
   // attract input: steer toward the waypoint of the current time window (depends on the state → deterministic replay)
   const scriptInput = (t, S) => { let w = ROUTE[0]; for (const r of ROUTE) if (r[0] <= t + 1e-9) w = r;
     const dx = w[1] - S.x, dy = w[2] - S.y, inp = { left: 0, right: 0, up: 0, down: 0, jump: 0, act: 0 };
-    if (Math.hypot(dx, dy) > 24) { if (Math.abs(dx) > 14) inp[dx > 0 ? 'right' : 'left'] = 1; if (Math.abs(dy) > 14) inp[dy > 0 ? 'down' : 'up'] = 1; }
+    if (len(dx, dy) > 24) { if (Math.abs(dx) > 14) inp[dx > 0 ? 'right' : 'left'] = 1; if (Math.abs(dy) > 14) inp[dy > 0 ? 'down' : 'up'] = 1; }
     return inp; };
   let cache = null;
   function at(t) {
     const loop = Math.floor(t / L), q = t - loop * L, n = Math.round(q / DT);
-    if (!cache || cache.loop !== loop || cache.S.steps > n) { const S0 = Object.assign(create(), { wt0: loop * L }); S0.cam = [Math.max(0, S0.x - VIEW.W / 2), Math.max(0, S0.y - VIEW.H / 2)]; cache = { loop, S: S0 }; }
+    if (!cache || cache.loop !== loop || cache.S.steps > n) { const S0 = Object.assign(create(), { wt0: loop * L }); S0.cam = camAt(S0); cache = { loop, S: S0 }; }
     const S = cache.S; while (S.steps < n) step(S, scriptInput(S.t, S));
     return Object.assign({}, S, { loop, q });
   }
-  const CONTROLS = { move: 'xy', buttons: [['act', 'Dash']], pointer: false };   // touch layout (input.js)
-  const HINT = 'Arrows / WASD move · X or Space dash · Esc menu';
-  const LERP = ['x', 'y', 't', 'cam'];                                              // interpolated between steps (smooth at any Hz)
+  const CONTROLS = { move: 'xy', buttons: [['act', 'Dash'], ['jump', 'Hop']], pointer: false };   // touch layout (input.js)
+  const HINT = 'Arrows / WASD move · X dash · Space hop · Esc menu';
+  const LERP = ['x', 'y', 'z', 't', 'cam'];                                         // interpolated between steps (smooth at any Hz)
   root.SIM = { DT, L, K, VIEW, WORLD, CONTROLS, HINT, LERP, TREES, ROCKS, SOLIDS, TUFTS, COINS, CRITTERS, gusts, gustAt, windAt, create, spawn, respawn, outOfPlay, step, at, scriptInput };
   if (typeof module !== 'undefined') module.exports = root.SIM;
 })(typeof window !== 'undefined' ? window : globalThis);

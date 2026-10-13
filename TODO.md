@@ -103,3 +103,17 @@ pixel-identical against the old engine).
   pitfalls.md and critics.md got the same changes in Codex's own wording (no generator question; Codex asks in chat).
 - ⬜ Migrate `~/2d_new_game` (its own customised engine) to the shell: the user's project, done only when they ask.
 - ⬜ Real-device pass (Android mid-range, iPhone) with `?perf=1`; record the numbers in `performance.md` as reference points.
+
+## Audit 2: engine polish, 2.5D, platform choice, AI handoff ✅
+
+- ✅ Streaming textures: `SCENE.BOOT`, load on first use (decoded off the main thread), `G.prefetch` / `G.unload`, `G.dim` and `L.hsz` read sizes from the manifest (no GPU upload to measure), `texMB` = what is loaded.
+- ✅ No per-draw garbage: scratch `G.xf`, reused `L.sprite` result and primitive uniform records, pooled depth queue, reused gust lists; templates hoist constant option records.
+- ✅ Render: comp = bg unless something reads the background (one full-res copy and target less), HDR bloom with one pass less and a stable bright pass, quarter-res rays below high, soft-edged drop shadows, crisp HUD at low render scale (`G.resize(scale, out)`), pixel-art canvas `pixelated`, labels without mips, QA records only in QA renders, feedback-loop error.
+- ✅ Shell: the attract demo never replays from the loop start at 144 Hz / slow motion, `S.warp` teleports are not smeared, dev line at 4 Hz, governor steps down on a vsync-missing phone, a step-down is re-tested after a week.
+- ✅ Sound: no StereoPanner leak, music skips ahead after a stall, layered sounds respect the voice cap, iOS silent switch, resume errors handled.
+- ✅ Collision: embedded boxes walk out, nudge in all directions, corner correction never outruns the move, carry through collision, `b.on` kept while standing still.
+- ✅ Feel: separate stop / turn / overspeed rates, jump not on stick-up, input buffered through hit-stop, eased camera lead, vertical framing on falls, top-down radial accel, real velocity after collisions, dash buffer, radial gamepad deadzone, no `Math.hypot` in sims, `tune.cjs` determinism check.
+- ✅ 2.5D: `L.view` / `L.at` (side, top, iso, persp), `L.dq` depth queue, `L.shadowAt`; the top-down template hops on z.
+- ✅ Platform choice: `SIM.PLATFORM` = universal / desktop / mobile (Step 0), honoured by the shell and input.
+- ✅ Skill: Step 0 asks view/depth and feel target when open, writes pre-production notes; `setup.sh` writes the project's `CLAUDE.md` / `AGENTS.md` map (files, where new things go, rules) from `templates/GAME.md`.
+- Next, only when a game needs it: fog into a quarter-res target, one-pass ink outline (dilation) for many inked actors, `L.M` out-parameter matrices for heavy rigs.
