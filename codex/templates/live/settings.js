@@ -3,19 +3,23 @@
 //   window.Q     the resolved quality knobs everything reads each frame: { tier, scale, fx, post, rays, ink, oct, shadows, shake }
 //   SETTINGS     open('pause') / close() the menu, result({ title, lines }) a win / game-over card, fit() the render scale to
 //                the screen, watch(ms) the adaptive governor (auto quality steps down when frames run long on this device)
-// Tiers: high = desktop look; mid = phones (render 0.75, fewer passes); low = weak phones (no bloom, no rays, no drop shadows,
-// fewer particles). The sim never reads Q: the attract demo and the play rules are the same on every device.
-// URL: ?q=low|mid|high forces a tier (not saved); ?render=1 (renders, QA) is always high.
+// Tiers: ultra = strong desktops (HUD and final grade supersampled on hi-DPI screens, more particles and ray taps; never on
+// touch screens, auto only for SIM.PLATFORM 'desktop'); high = desktop look; mid = phones (render 0.75, fewer passes); low =
+// weak phones (no bloom, no rays, no drop shadows, fewer particles). The sim never reads Q: the attract demo and the play rules
+// are the same on every device, and no gameplay cue may exist only above mid.
+// URL: ?q=low|mid|high|ultra forces a tier (not saved); ?render=1 (renders, QA) is always high.
 // Q.oct (fbm octaves) is baked into shaders when they compile: a tier change at runtime applies it on the next page load.
 (function () {
   const KEY = 'r2g:' + location.pathname.replace(/index\.html$/, ''), qs = new URLSearchParams(location.search);
   const RENDER = qs.has('render'), media = (m) => !!(window.matchMedia && matchMedia(m).matches);
-  const TIERS = {
+  const TIERS = {                                                     // out: the backbuffer's cap in view px (×2 = 4K-crisp HUD)
+    ultra: { scale: 1, out: 2, fx: 1.25, post: 2, rays: 96, ink: 10, oct: 5 },
     high: { scale: 1, fx: 1, post: 2, rays: 72, ink: 8, oct: 5 },
     mid: { scale: 0.75, fx: 0.7, post: 1, rays: 36, ink: 6, oct: 4 },
     low: { scale: 0.6, fx: 0.4, post: 0, rays: 0, ink: 4, oct: 3 },
   };
-  const ORDER = ['low', 'mid', 'high'];
+  const ORDER = ['low', 'mid', 'high', 'ultra'];
+  const PLATFORM = () => (window.SIM && SIM.PLATFORM) || 'universal';      // SIM loads after this file: read it late
   const DEF = { quality: 'auto', autoTier: null, shadows: 'auto', music: true, sfx: true, vol: 0.8,
     shake: !media('(prefers-reduced-motion: reduce)'), touch: 'auto' };
   let saved = {}; try { saved = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { saved = {}; }
@@ -25,14 +29,14 @@
   // device guess: weak phone → low, phone/tablet → mid, desktop → high; capped by what the governor settled on before
   const detect = () => {
     const coarse = media('(pointer: coarse)'), mem = navigator.deviceMemory || 8, cores = navigator.hardwareConcurrency || 8;
-    const d = coarse ? (mem <= 3 || cores <= 4 ? 'low' : 'mid') : 'high';
+    const d = coarse ? (mem <= 3 || cores <= 4 ? 'low' : 'mid') : PLATFORM() === 'desktop' && cores >= 8 && mem >= 8 ? 'ultra' : 'high';
     const fresh = SET.autoTier && Date.now() - (SET.autoTierAt || 0) < 7 * 864e5;   // a governor step-down is re-tested after a week
     return fresh && ORDER.indexOf(SET.autoTier) < ORDER.indexOf(d) ? SET.autoTier : d;
   };
   const tierNow = () => RENDER ? 'high' : TIERS[qs.get('q')] ? qs.get('q') : SET.quality !== 'auto' && TIERS[SET.quality] ? SET.quality : detect();
   const resolve = () => {
     const tier = tierNow(), t = TIERS[tier];
-    return Object.assign(window.Q || {}, t, { tier, auto: !RENDER && !qs.get('q') && SET.quality === 'auto',
+    return Object.assign(window.Q || {}, { out: 1 }, t, { tier, auto: !RENDER && !qs.get('q') && SET.quality === 'auto',
       shadows: RENDER || (SET.shadows === 'auto' ? tier !== 'low' : !!SET.shadows), shake: RENDER || SET.shake ? 1 : 0 });
   };
   window.Q = resolve();
@@ -43,7 +47,8 @@
   S.scaleFor = (shown) => RENDER ? 1 : +(qs.get('scale') || Math.max(0.5, Math.min(Q.scale, shown || 1)));
   const shownNow = () => { const c = window.G && G.canvas; return c ? c.getBoundingClientRect().width * devicePixelRatio / G.W : 1; };
   // the backbuffer (final grade + HUD) at what the screen shows, up to view size; the low tier keeps it at the render scale
-  S.outFor = (shown, k) => RENDER ? 1 : Q.tier === 'low' ? k : Math.max(k, Math.min(1, shown || 1));
+  S.outFor = (shown, k) => RENDER ? 1 : Q.tier === 'low' ? k : Math.max(k, Math.min(Q.out || 1, shown || 1));
+  S.resolve = () => resolve();                                          // index.html, once SIM (and SIM.PLATFORM) is loaded
   S.fit = () => { if (!window.G || !G.canvas || RENDER) return; const sh = shownNow(), k = S.scaleFor(sh), o = S.outFor(sh, k);
     if (Math.abs(k - G.SCALE) > 0.04 || Math.abs(o - G.OUT) > 0.04) { G.resize(k, o); if (window.LIB && LIB.resize) LIB.resize(); } };
   let fitT = 0; addEventListener('resize', () => { clearTimeout(fitT); fitT = setTimeout(S.fit, 250); });
@@ -77,7 +82,7 @@
 #r2gm button:hover,#r2gm button:focus-visible{background:#ffffff2e;outline:2px solid #ffd76a;outline-offset:1px}
 #r2gm button b{opacity:.75;font-weight:600}`;
   let root = null, card = null;
-  const LBL = { auto: 'Auto', high: 'High', mid: 'Medium', low: 'Low', true: 'On', false: 'Off' };
+  const LBL = { auto: 'Auto', ultra: 'Ultra', high: 'High', mid: 'Medium', low: 'Low', true: 'On', false: 'Off' };
   const cyc = (k, opts) => { SET[k] = opts[(opts.indexOf(SET[k]) + 1) % opts.length]; S.apply(); };
   let wait = null;                                                     // Controls screen: the action waiting for a key
   let eat = false;                                                     // swallow that key's keyup: Space would re-click the button
@@ -92,7 +97,7 @@
     if (mode === 'pause') L.push(['Resume', null, () => S.close()]);
     L.push([mode === 'pause' ? 'Restart' : 'Play again', null, () => { S.close(); S.on.restart && S.on.restart(); }]);
     if (mode === 'pause') {
-      L.push(['Quality', LBL[SET.quality] + (SET.quality === 'auto' ? ` (${LBL[Q.tier]})` : ''), () => cyc('quality', ['auto', 'high', 'mid', 'low'])]);
+      L.push(['Quality', LBL[SET.quality] + (SET.quality === 'auto' ? ` (${LBL[Q.tier]})` : ''), () => cyc('quality', media('(pointer: coarse)') ? ['auto', 'high', 'mid', 'low'] : ['auto', 'ultra', 'high', 'mid', 'low'])]);
       L.push(['Shadows', SET.shadows === 'auto' ? `Auto (${LBL[Q.shadows]})` : LBL[SET.shadows], () => cyc('shadows', ['auto', true, false])]);
       if (window.SOUND && SOUND.song) L.push(['Music', LBL[SET.music], () => cyc('music', [true, false])]);
       L.push(['Sound effects', LBL[SET.sfx], () => cyc('sfx', [true, false])]);

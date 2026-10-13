@@ -31,7 +31,7 @@
   };
   // scale (0.25..1) = the scene's render targets (lib.js re-creates them in L.resize); out (scale..1) = the backbuffer, where the
   // final grade upsamples the scene and the HUD draws: a phone renders the world at 0.66 but its text and edges stay crisp
-  G.resize = (scale, out = scale) => { const c = G.canvas; G.SCALE = Math.min(1, Math.max(0.25, scale)); G.OUT = Math.min(1, Math.max(G.SCALE, out));
+  G.resize = (scale, out = scale) => { const c = G.canvas; G.SCALE = Math.min(1, Math.max(0.25, scale)); G.OUT = Math.min(2, Math.max(G.SCALE, out));
     c.width = Math.round(G.W * G.OUT); c.height = Math.round(G.H * G.OUT); G.BW = c.width; G.BH = c.height; };
   const useP = (P) => { if (curP !== P) { gl.useProgram(P.p); curP = P; G.stats.progs++; } };
   const useVao = (v) => { if (curVao !== v) { gl.bindVertexArray(v); curVao = v; } };

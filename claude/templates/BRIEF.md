@@ -5,6 +5,7 @@ The user's answers, in a few lines. Every phase, gate and critic reads this; upd
 - **Game and player:** <what the player is and does in this picture>
 - **Scope:** <one screen / one short level / level + finale>
 - **Platform:** <universal / desktop / mobile> = `SIM.PLATFORM` · orientation: <landscape / portrait, from the reference>
+- **Quality plan:** built and judged at mid (the phone look); top tier for this platform: <high / ultra (desktop)>; what only the top tier adds: <…>
 - **View and depth:** <side / top-down 3/4 / isometric / 2.5D lanes / pseudo-3D road> = template + `L.view` mode
 - **Feel target:** <tight and fast / weighty / floaty> → <run speed, accel ms, jump height and time to apex, coyote, buffer>
 - **Controls:** keys <…> · touch `SIM.CONTROLS` <stick x|xy + buttons …> · pad <A jump, X act…>

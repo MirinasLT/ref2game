@@ -38,6 +38,7 @@ const SRC = ['assets.js', 'sizes.js', 'atlas.js', 'settings.js', 'gl.js', 'lib.j
   const PLATFORM = SIM.PLATFORM || 'universal';                                       // 'universal' | 'desktop' | 'mobile' (Step 0)
   document.documentElement.style.setProperty('--ar', VW / VH); document.body.classList.toggle('land', VW > VH && PLATFORM !== 'desktop');
   const cvs = document.getElementById('c'), shown = cvs.getBoundingClientRect().width * devicePixelRatio / VW;
+  SETTINGS.resolve();                                                     // tiers now see SIM.PLATFORM
   const k0 = SETTINGS.scaleFor(shown); G.init(cvs, VW, VH, { scale: k0, out: SETTINGS.outFor(shown, k0), preserve: render, oct: Q.oct });
   const rep = new Set(SCENE.REPEAT || []), near = (n) => SCENE.NEAREST === true || (SCENE.NEAREST || []).includes(n);   // NEAREST: true = all
   const AT = window.ATLAS || {}, sheets = [...new Set(Object.values(AT).map((a) => a[0]))];

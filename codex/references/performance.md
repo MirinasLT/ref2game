@@ -230,10 +230,11 @@ Written in Phase 1, right after PLAN.md and before the systems are coded; update
 
 ## 13. Quality tiers, options and the adaptive governor (settings.js)
 
-One game, three costs. `window.Q` is resolved from the player's options and the device, and lib.js reads it every frame:
+One game, four costs. `window.Q` is resolved from the player's options and the device, and lib.js reads it every frame:
 
 | Tier | Who | Render scale cap | `fx` (particles, motes) | `post` (bloom radii) | `rays` (taps) | ink passes | fbm octaves | drop shadows |
 |---|---|---|---|---|---|---|---|---|
+| ultra | strong desktops (Auto only for `SIM.PLATFORM = 'desktop'`, ≥ 8 cores and 8 GB; never on touch screens); backbuffer up to 2× view (crisp HUD on hi-DPI) | 1 | 1.25 | 2 | 96 | 10 | 5 | on |
 | high | desktop | 1 | 1 | 2 | 72 | 8 | 5 | on |
 | mid | phones, tablets | 0.75 | 0.7 | 1 | 36 | 6 | 4 | on |
 | low | weak phones (≤ 4 cores or ≤ 3 GB) | 0.6 | 0.4 | 0 | off | 4 | 3 | off (Auto) |

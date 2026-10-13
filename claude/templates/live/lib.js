@@ -302,7 +302,7 @@ uniform sampler2D u_src; uniform vec2 u_sun; uniform float u_taps;
 void main(){ vec2 uv = scr(v_px), su = scr(u_sun); vec2 dir = uv - su; float acc = 0.0, dec = 1.0, w = 0.0;
   float j = hash(v_px) * 0.9;
   float dk = pow(0.975, 72.0 / u_taps);              // same falloff along the ray whatever the tap count (quality tier)
-  for (int i = 0; i < 72; i++){ if (float(i) >= u_taps) break; float f = (float(i) + j) / u_taps; acc += texture(u_src, uv - dir * f * 0.92).r * dec; w += dec; dec *= dk; }
+  for (int i = 0; i < 96; i++){ if (float(i) >= u_taps) break; float f = (float(i) + j) / u_taps; acc += texture(u_src, uv - dir * f * 0.92).r * dec; w += dec; dec *= dk; }
   acc /= w;
   float fall = smoothstep(1.4, 0.0, length((v_px - u_sun) / u_res.x));
   o = vec4(vec3(acc * fall), 1.0); }`;
